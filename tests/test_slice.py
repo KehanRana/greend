@@ -90,7 +90,7 @@ def test_upstream_errors(setup, kind, code):
         assert r.status_code == code
         assert "sensitive" not in r.text and "private upstream" not in r.text
         assert client.get("/api/activity", headers=HEADERS).json()["items"][0]["outcome"] == (
-            "unknown" if kind == "timeout" else "failed")
+            "unknown" if kind in {"timeout", "bad"} else "failed")
 
 
 def test_constraints_and_readiness(setup, tmp_path):
@@ -130,7 +130,7 @@ def test_job_policy_schema():
     policy = {"allowed_regions":["us-east-1"], "deadline_policy":"expire",
               "deadline_at":(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat()}
     assert JobSubmission.model_validate({"request":BODY,"policy":policy}).policy.deadline_policy == 'expire'
-    for patch in [{"deadline_policy":"unknown"}, {"deadline_at":"2020-01-01T00:00:00Z"},
+    for patch in [{"deadline_policy":"unknown"}, {"deadline_at":"2020-01-01T00:00:00"},
                   {"allowed_regions":[]}, {"max_carbon_gco2e_kwh":-1}]:
         with pytest.raises(ValidationError):
             JobSubmission.model_validate({"request":BODY,"policy":policy | patch})

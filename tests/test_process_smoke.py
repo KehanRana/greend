@@ -68,3 +68,66 @@ def test_real_process_restart(tmp_path):
             if process.poll() is None:
                 process.terminate()
                 process.wait(timeout=5)
+
+
+def test_real_job_worker_and_pending_restart(tmp_path):
+    from datetime import datetime,timedelta,timezone
+    gateway_port,upstream_port=port(),port()
+    env=os.environ | {'PYTHONPATH':'backend','GREENROUTE_GATEWAY_KEY':'process-jobs-key',
+        'GREENROUTE_DATABASE':str(tmp_path/'jobs.db'),'GREENROUTE_MODE':'demo',
+        'GREENROUTE_UPSTREAM_URL':f'http://127.0.0.1:{upstream_port}',
+        'GREENROUTE_UPSTREAM_KEY':'process-upstream-key','GREENROUTE_WORKER_POLL_SECONDS':'0.1'}
+    subprocess.run([sys.executable,'-m','alembic','upgrade','head'],env=env,check=True,capture_output=True)
+    processes=[]
+    def start(args):
+        process=subprocess.Popen([sys.executable,*args],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        processes.append(process)
+        return process
+    def gateway():
+        process=start(['-m','uvicorn','greenroute.app:create_app','--factory','--host','127.0.0.1','--port',str(gateway_port)])
+        wait(base+'/ready',process)
+        return process
+    base=f'http://127.0.0.1:{gateway_port}'
+    headers={'authorization':'Bearer process-jobs-key','idempotency-key':'process-job'}
+    try:
+        upstream=start(['-m','uvicorn','greenroute.mock:app','--host','127.0.0.1','--port',str(upstream_port)])
+        wait(f'http://127.0.0.1:{upstream_port}/openapi.json',upstream)
+        api=gateway()
+        body={'request':{'model':'demo-model','messages':[{'role':'user','content':'private process job'}]},
+              'policy':{'allowed_regions':['eu-central-1'],'max_carbon_gco2e_kwh':None,
+                        'deadline_at':(datetime.now(timezone.utc)+timedelta(minutes=5)).isoformat(),
+                        'deadline_policy':'expire'}}
+        response=httpx.post(base+'/api/jobs',headers=headers,json=body,trust_env=False)
+        assert response.status_code == 202
+        jid=response.json()['id']
+        api.terminate()
+        api.wait(timeout=5)
+        gateway()
+        assert httpx.get(base+f'/api/jobs/{jid}',headers=headers,trust_env=False).json()['status'] == 'queued'
+        runner=start(['-m','greenroute.worker'])
+        for _ in range(100):
+            assert runner.poll() is None,'Worker unexpectedly exited'
+            detail=httpx.get(base+f'/api/jobs/{jid}',headers=headers,trust_env=False).json()
+            if detail['status'] == 'succeeded':
+                break
+            time.sleep(.05)
+        else:
+            raise AssertionError('Job did not complete through worker process')
+        assert detail['attempt_count'] == 1 and detail['decision']['selected_endpoint'] == 'eu-central-1'
+        assert detail['result']['usage']['total_tokens'] == 56
+        retry=httpx.post(base+'/api/jobs',headers=headers,json=body,trust_env=False)
+        assert retry.json()['id'] == jid
+        activity=httpx.get(base+'/api/activity',headers=headers,trust_env=False)
+        assert 'private process job' not in activity.text
+        example=subprocess.run([sys.executable,'examples/batch.py','--base-url',base],env=env,capture_output=True,text=True,timeout=10)
+        assert example.returncode == 0, example.stderr
+        assert 'Status: succeeded' in example.stdout
+    finally:
+        for process in reversed(processes):
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
