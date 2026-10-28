@@ -12,6 +12,7 @@ class Settings(BaseModel):
     upstream_url: str = "http://127.0.0.1:8001"
     upstream_key: SecretStr = SecretStr("demo-upstream-key")
     timeout_seconds: float = Field(default=60, gt=0, le=300)
+    mock_delay_seconds: float = Field(default=0, ge=0, le=30, allow_inf_nan=False)
 
     grid_refresh_seconds: float = Field(default=60, ge=1, le=900)
     grid_max_age_seconds: float = Field(default=300, gt=0, le=3600)

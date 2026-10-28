@@ -1,4 +1,5 @@
 """Local deterministic upstream. All regions are simulated on this same process."""
+import asyncio
 import json
 import secrets
 from pathlib import Path
@@ -18,6 +19,7 @@ async def complete(region: str, payload: ChatRequest, request: Request):
         return JSONResponse({"error": {"message": "Invalid upstream key"}}, status_code=401)
     if region not in {"us-east-1", "eu-central-1", "ap-southeast-2"} or payload.model != "demo-model":
         return JSONResponse({"error": {"message": "Unknown simulated deployment"}}, status_code=404)
+    await asyncio.sleep(settings.mock_delay_seconds)
     fixture = json.loads((Path(__file__).resolve().parents[2] / "fixtures" / "summaries.json").read_text())
     return {"id": "chatcmpl-demo-fixture", "object": "chat.completion", "created": 1793145600,
             "model": "demo-model", "choices": [{"index": 0, "message": {"role": "assistant",
