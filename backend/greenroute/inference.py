@@ -18,18 +18,25 @@ class UpstreamFailure(Exception):
 
 
 async def execute(client, settings, region, payload, request_id):
+    return await execute_http(client, f"{settings.upstream_url}/{region}/v1/chat/completions",
+                              settings.upstream_key.get_secret_value(), payload.model_dump(exclude_none=True),
+                              request_id, settings.timeout_seconds)
+
+
+async def execute_http(client, url, api_key, body, request_id, timeout_seconds):
+    """Shared completion/error contract; callers supply administrator-approved destinations."""
     try:
-        async with asyncio.timeout(settings.timeout_seconds):
+        async with asyncio.timeout(timeout_seconds):
             response = await client.post(
-                f"{settings.upstream_url}/{region}/v1/chat/completions",
-                json=payload.model_dump(exclude_none=True),
-                headers={"authorization": f"Bearer {settings.upstream_key.get_secret_value()}",
+                url,
+                json=body, follow_redirects=False,
+                headers={"authorization": f"Bearer {api_key}",
                          "x-greenroute-request-id": request_id})
     except httpx.PoolTimeout:
         raise UpstreamFailure(502, "Local upstream connection pool is busy", "upstream_pool_busy",
                               safe_to_retry=True) from None
     except (httpx.ConnectTimeout, httpx.ConnectError):
-        raise UpstreamFailure(502, "Unable to connect to simulated upstream", "upstream_unavailable",
+        raise UpstreamFailure(502, "Unable to connect to upstream", "upstream_unavailable",
                               safe_to_retry=True, endpoint_failure=True) from None
     except (httpx.TimeoutException, TimeoutError):
         raise UpstreamFailure(504, "Upstream timed out; completion is uncertain", "upstream_timeout", uncertain=True,
@@ -42,7 +49,7 @@ async def execute(client, settings, region, payload, request_id):
         raise UpstreamFailure(429, "Upstream rate limit", "upstream_rate_limit",
                               retry_after=retry or None, safe_to_retry=True)
     if response.is_error or response.is_redirect:
-        raise UpstreamFailure(502, "Simulated upstream rejected request", "upstream_error",
+        raise UpstreamFailure(502, "Upstream rejected request", "upstream_error",
                               uncertain=response.status_code >= 500,
                               endpoint_failure=response.status_code >= 500,
                               disable_endpoint=response.status_code in {401,403,404})
