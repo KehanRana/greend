@@ -4,16 +4,20 @@ Local, simulated inference gateway for the Micro-Grid Aware LLM Inference Schedu
 
 **Implemented:** SDK-compatible non-streaming text chat and persisted routing metadata (M1); timestamped grid fixtures, caching and carbon policies (M2); durable asynchronous jobs, owner-scoped polling/cancellation, independent worker, retries, leases, health and retention (M3).
 
-**Planned:** emissions estimates/dashboard (M4), 500-job demonstration and performance validation (M5), conditional live-provider integration (M6). All regions point to one local mock. There is no real inference, energy measurement or verified carbon reduction.
+**Implemented M4:** versioned per-execution estimates, aggregate APIs, React dashboard, persistent grid scenarios and resumable synthetic batch replay.
+
+**Planned:** systematic performance/fault validation and final rehearsal (M5), conditional live-provider integration (M6). All regions point to one local mock. There is no real inference, energy measurement or verified carbon reduction.
 
 ## Quickstart
 
-Run from the repository root with Python 3.12+. The lock is verified on Python 3.14.5/macOS arm64; other platforms require verification. Node is not required until dashboard implementation.
+Run from the repository root with Python 3.12+. The lock is verified on Python 3.14.5/macOS arm64; other platforms require verification. The dashboard also requires Node/npm (verified with Node 22.14.0 and npm 10.9.2).
 
 ```sh
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.lock
+npm ci --prefix frontend
+npm run build --prefix frontend
 cp .env.example .env
 ```
 
@@ -32,7 +36,7 @@ Apply migrations before starting or restarting services after an update:
 python -m alembic upgrade head
 ```
 
-Revision `002` adds grid mappings/quality; `003` adds job lifecycle and endpoint health metadata. Existing M1/M2 records are preserved. Downgrading deletes the corresponding schema/data; use it only on disposable databases.
+Revision `002` adds grid mappings/quality; `003` adds job lifecycle/health; `004` adds estimate metadata and persistent scenarios. Existing M1/M2 records are preserved. Downgrading deletes the corresponding schema/data; use it only on disposable databases.
 
 Start the mock in terminal 1:
 
@@ -61,6 +65,8 @@ python examples/batch.py --max-carbon 150
 ```
 
 The default batch example chooses the cleanest eligible region immediately. The 150-threshold example may wait approximately three minutes for the Frankfurt fixture drop. It polls for up to 390 seconds; stopping the client does not cancel its durable job. Use `--base-url http://127.0.0.1:PORT` for a different gateway port.
+
+Dashboard: `http://127.0.0.1:8000/dashboard/`. Build before starting the gateway; the built dashboard shares its origin. Existing installations should preserve their `.env`, migrate and restart services after updating.
 
 API documentation: `http://127.0.0.1:8000/docs`. `/health` checks liveness; `/ready` checks schema/storage. Worker health and performance are not part of readiness yet.
 
@@ -117,13 +123,13 @@ A claim has a random owner token and a renewable lease. The default 120-second l
 
 Only classified pre-connection failures and explicit 429 rejections may retry. Backoff starts at two seconds, honors numeric/HTTP-date Retry-After guidance, allows at most three total attempts and never schedules a retry at or beyond the deadline. Ambiguous read/write failures, 5xx responses and malformed successful responses become unknown. Configuration/auth/model errors fail and disable the endpoint. Graceful worker shutdown drains current calls; a hard crash leaves leases for recovery.
 
-Three consecutive endpoint connection/5xx failures open its circuit. The worker probes after 30 seconds; a successful health probe restores eligibility. Configuration errors need correction and explicit operator reenablement. A probe returning 401/403/404 also requires operator correction.
+Three consecutive endpoint connection/5xx failures open its circuit. The worker probes after 30 seconds; a successful health probe restores eligibility. Configuration errors need correction/restart and explicit operator reenablement. A probe returning 401/403/404 also requires operator correction.
 
 ## Credentials, operations and retention
 
 The primary gateway key maps to owner `local`. Optional `GREENROUTE_CLIENT_KEYS` is a JSON mapping of stable client names to distinct bearer keys; `.env.example` shows shell quoting. Job output and cancellation are owner-scoped. Regional/activity metadata remains shared among authenticated clients; this is a local prototype rather than a production tenant-isolation system.
 
-An optional **distinct** `GREENROUTE_OPERATOR_KEY` enables `POST /api/operator/endpoints/{id}/enable` after correcting endpoint configuration. A client key cannot perform this action. Without an operator key the mutation is unavailable. Live mode and live providers remain unsupported; scenario-mutation controls are deferred to the full demo milestone.
+An optional **distinct** `GREENROUTE_OPERATOR_KEY` enables `POST /api/operator/endpoints/{id}/enable` after correcting endpoint configuration. A client key cannot perform this action. Without an operator key the mutation is unavailable. Live mode and live providers remain unsupported. Scenario changes additionally require operator authorization and demo mode.
 
 The SQLite file is owner-only. Queued content is stored locally for execution; never commit `.env` or runtime databases. Logs and metadata endpoints omit prompts, completion bodies and raw provider errors. Only an authorized job-result read returns completion content.
 
@@ -138,13 +144,63 @@ curl -H "Authorization: Bearer $GREENROUTE_GATEWAY_KEY" http://127.0.0.1:8000/ap
 python examples/carbon_policy.py
 ```
 
-The fixture starts at Virginia 400, Frankfurt 300 and Sydney 500 gCO₂e/kWh. Frankfurt drops to 80 after 180 seconds, visible on the next poll. Each gateway restart begins a new simulated timeline. `demo:` zone IDs are not verified Electricity Maps mappings.
+The fixture starts at Virginia 400, Frankfurt 300 and Sydney 500 gCO₂e/kWh. Frankfurt drops to 80 after 180 seconds, visible on the next poll. The default gateway persists its scenario and start time across restarts. The standalone offline fixture example still uses a fresh private clock. `demo:` zone IDs are not verified Electricity Maps mappings.
 
 The offline script advances its own clock instantly: **wait → select Frankfurt → expire** at independent evaluation times 0, 180 and 200 seconds. It does not submit jobs or invoke inference.
 
 Flexible routing enforces allowed regions, matching model/version, health and simulated locality before optimizing fresh intensity. Ties use latency rank then endpoint ID. `expire` blocks dispatch at the deadline. `execute_best_available` selects the best fresh eligible region above threshold if needed, or latency rank when no fresh signal exists. Exceptions are explicit; no eligible region means wait before deadline and expire at it.
 
 Unchanged waiting decisions are coalesced; the job detail shows evidence of the last changed waiting decision. Every actual dispatch records a new decision with exact snapshot references.
+
+## Dashboard and estimates
+
+Open `/dashboard/`, enter your client gateway key and connect. Credentials remain in browser memory only, with no local/session storage. The overview has a regional map, comparison totals, recent decisions and your pending queue. Separate queue/evidence views keep the main page short. Click a region or request to inspect its stored evidence. Pending jobs can be cancelled from the queue.
+
+The frontend polls metadata every three seconds, retains last-good values on refresh failure and marks them as cached. It uses locally bundled IBM Plex Sans and Natural Earth geographic data; licenses are included in the dashboard assets. The map shows endpoint locations, not verified electricity-zone boundaries. The comparison curve shows the most recent completed default-to-selected comparison available in the recent activity slice, not a measured network path.
+
+`GET /api/metrics?mode=demo` requires a client key and reports retained workspace execution counts, comparable/excluded estimates, signed grams, exclusion reasons, assumption groups and owner-specific job states. `mode=live` is segregated; no live data is generated. Activity rows include the stored estimate and immutable dispatch context. Metadata is shared, while job results remain owner-scoped.
+
+For each successful execution:
+
+```
+estimated kWh = (prompt tokens + completion tokens) / 1,000 × configured coefficient
+estimated gCO₂e = estimated kWh × dispatch-time grid intensity
+difference = fixed-baseline estimate − selected-route estimate
+```
+
+The default baseline is `us-east-1`; the illustrative coefficient is 0.001 kWh per 1,000 total tokens. The selected/default grid snapshots, their validity, model/version, coefficient/version and baseline identity are bound before dispatch. Later settings or grid changes do not rewrite those assumptions. Successful completion persists the estimate in the same transaction; a unique execution identity prevents double counting.
+
+Missing usage, stale/missing signals and an ineligible default region make the comparison unavailable. These executions appear in excluded counts rather than as measured zeros. Primary totals cover comparable successful executions only; negative differences remain negative. Historical pre-M4 executions without dispatch evidence are excluded, not backfilled from current data. A secondary worst-region comparison is stored in each available estimate's assumptions and is never substituted for the primary baseline.
+
+All current usage and grid data is simulated. The energy model is illustrative; the estimate excludes failed attempts, networking, cooling, embodied energy and temporal-shifting benefits. It does not establish real avoided emissions, offsets or reporting compliance.
+
+For frontend development, keep the Python gateway running and use:
+
+```sh
+npm run dev --prefix frontend
+```
+
+Open the printed `/dashboard/` URL. Vite proxies `/api` to port 8000; set `GREENROUTE_API_ORIGIN` for another local gateway. Production uses `npm run build --prefix frontend` and the gateway's static mount. No third-party font or map requests are needed.
+
+## Demo scenarios and 500-job replay
+
+In the dashboard, **Grid scenario** accepts the separate operator key:
+
+- `high`: all three regions remain above the 150 threshold.
+- `clean`: Frankfurt is 80 gCO₂e/kWh.
+- `scheduled`: Frankfurt drops after 180 seconds from this scenario's persisted start time.
+
+`POST /api/demo/scenario` takes `{ "scenario": "high" | "clean" | "scheduled" }`; `GET /api/demo/scenario` is client-readable metadata. Applying a scenario changes future grid observations across the workspace and refreshes the cache; it never deletes jobs, results or totals. If refresh fails, the response reports it. Live-mode mutation is unavailable.
+
+The dashboard submits up to 100 synthetic jobs at a time. An unconfirmed submission can be retried with the same saved key/body while its dialog remains open. For a resumable 500-job demonstration, set the operator key in the environment and run:
+
+```sh
+python examples/demo_batch.py --count 500 --release-clean --run-file runtime/demo-run.json
+```
+
+This applies high signals, submits jobs, waits until they are waiting, applies the clean scenario and polls until terminal. It changes the shared demo grid and can release other waiting jobs, so use a dedicated demo workspace for isolated run totals. The JSON output labels **this-run state counts** separately from **workspace estimate totals**.
+
+The run file contains synthetic bodies, deadlines and stable idempotency keys, with owner-only file permissions and no credentials. Repeating the same command resumes those stored bodies instead of generating new jobs within the 24-hour key window. Existing files determine the batch size; choose a new filename for a new run. Polling is bounded, and accepted work remains durable if the client stops.
 
 ## Configuration defaults
 
@@ -159,11 +215,16 @@ Unchanged waiting decisions are coalesced; the job detail shows evidence of the 
 | `GREENROUTE_WORKER_POLL_SECONDS` | 10 |
 | `GREENROUTE_RETRY_BASE_SECONDS` | 2 |
 | `GREENROUTE_LEASE_SECONDS` | 120 |
+| `GREENROUTE_BASELINE_ENDPOINT` | us-east-1 |
+| `GREENROUTE_ENERGY_KWH_PER_1000_TOKENS` | 0.001 |
+| `GREENROUTE_ENERGY_MODEL_VERSION` | illustrative-v1 |
 
 ## Verification
 
 ```sh
 python -m pytest -q
+npm run test --prefix frontend
+npm run build --prefix frontend
 ```
 
-Tests use isolated temporary databases, deterministic clocks and real local process checks. See [M1 verification](docs/m1-verification.md), [M2 verification](docs/m2-verification.md) and [M3 verification](docs/m3-verification.md) for evidence and boundaries. Load/latency targets and real grid/provider locality remain unverified.
+Tests use isolated temporary databases, deterministic clocks and real local process checks. See [M1 verification](docs/m1-verification.md), [M2 verification](docs/m2-verification.md) and [M3 verification](docs/m3-verification.md) and [M4 verification](docs/m4-verification.md) for evidence and boundaries. Load/latency targets and real grid/provider locality remain unverified.
