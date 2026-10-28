@@ -24,3 +24,14 @@ async def complete(region: str, payload: ChatRequest, request: Request):
             "content": fixture["summary"]}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": fixture["prompt_tokens"], "completion_tokens": fixture["completion_tokens"],
                       "total_tokens": fixture["prompt_tokens"] + fixture["completion_tokens"]}}
+
+
+@app.get("/{region}/health")
+async def health(region: str, request: Request):
+    settings=Settings.from_env()
+    if not secrets.compare_digest(request.headers.get("authorization","").encode(),
+            f"Bearer {settings.upstream_key.get_secret_value()}".encode()):
+        return JSONResponse({"error":{"message":"Invalid upstream key"}},status_code=401)
+    if region not in {"us-east-1","eu-central-1","ap-southeast-2"}:
+        return JSONResponse({"error":{"message":"Unknown simulated deployment"}},status_code=404)
+    return {"status":"ok","mode":"demo"}

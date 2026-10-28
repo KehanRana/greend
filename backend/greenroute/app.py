@@ -5,15 +5,18 @@ from contextlib import asynccontextmanager, suppress
 from uuid import uuid4
 
 import httpx
-from fastapi import Depends, FastAPI, Request, Query
+from fastapi import Depends, FastAPI, Request, Query, Header
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from greenroute.config import Settings
 from greenroute.clock import SystemClock
 from greenroute.grid import FixtureGridAdapter, GridPoller, latest_snapshots, signal_status
-from greenroute.contracts import ChatRequest
+from greenroute.contracts import ChatRequest, JobSubmission
+from greenroute import jobs
+from greenroute.endpoint_health import record_outcome, enable
 from greenroute.policy import interactive_decision
 from greenroute.inference import execute, UpstreamFailure
 from greenroute.store import make_engine, ready, utcnow
@@ -51,10 +54,39 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
     app.state.grid_poller = poller
 
     async def authenticated(request: Request):
-        if not secrets.compare_digest(request.headers.get("authorization", ""),
-                                      f"Bearer {settings.gateway_key.get_secret_value()}"):
-            from fastapi import HTTPException
-            raise HTTPException(status_code=401, detail="Invalid gateway credentials")
+        from fastapi import HTTPException
+        supplied = request.headers.get("authorization", "").encode()
+        credentials = {"local":settings.gateway_key} | settings.client_keys
+        for owner,key in credentials.items():
+            if secrets.compare_digest(supplied,f"Bearer {key.get_secret_value()}".encode()):
+                return owner
+        raise HTTPException(status_code=401,detail="Invalid gateway credentials")
+
+    async def operator(request: Request):
+        from fastapi import HTTPException
+        if not settings.operator_key or not secrets.compare_digest(request.headers.get("authorization","").encode(),
+                f"Bearer {settings.operator_key.get_secret_value()}".encode()):
+            raise HTTPException(status_code=401,detail="Operator credentials required")
+
+    slots = asyncio.Semaphore(settings.interactive_concurrency)
+
+    async def interactive_slot():
+        from fastapi import HTTPException
+        if slots.locked():
+            raise HTTPException(status_code=429,detail="Interactive capacity reached",headers={"retry-after":"1"})
+        async with slots:
+            yield
+
+    @app.exception_handler(jobs.JobError)
+    async def job_error(request,exc):
+        response=error(exc.status,exc.message,exc.code)
+        if exc.status == 429:
+            response.headers["retry-after"]="10"
+        return response
+
+    @app.exception_handler(SQLAlchemyError)
+    async def storage_error(request,exc):
+        return error(503,"Storage unavailable; retry with the same idempotency key","storage_unavailable")
 
     @app.exception_handler(RequestValidationError)
     async def invalid(request, exc):
@@ -65,7 +97,9 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
 
     @app.exception_handler(HTTPException)
     async def http_error(request, exc):
-        return error(exc.status_code, str(exc.detail), "http_error")
+        response = error(exc.status_code, str(exc.detail), "http_error")
+        response.headers.update(exc.headers or {})
+        return response
 
     @app.middleware("http")
     async def body_limit(request, call_next):
@@ -107,6 +141,7 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
                 grid_zone=endpoint["grid_zone"], model=endpoint["model"],
                 model_version=endpoint["model_version"], healthy=bool(endpoint["healthy"]),
                 locality=endpoint["locality"], latency_rank=endpoint["latency_rank"],
+                disabled_reason=endpoint["disabled_reason"], consecutive_failures=endpoint["consecutive_failures"],
                 signal_status=status, intensity_gco2e_kwh=snapshot.intensity if snapshot else None,
                 snapshot_id=snapshot.id if snapshot else None, source=snapshot.source if snapshot else None,
                 observed_at=snapshot.observed_at.isoformat() if snapshot else None,
@@ -115,20 +150,49 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
                 quality_flags=list(snapshot.quality_flags) if snapshot else []))
         return {"mode": "demo", "evaluated_at": now.isoformat(), "poller": poller.metadata(), "items": items}
 
-    @app.post("/v1/chat/completions", dependencies=[Depends(authenticated)])
+    @app.post("/api/jobs",status_code=202)
+    async def submit_job(payload: JobSubmission, owner: str = Depends(authenticated),
+                         idempotency_key: str = Header(min_length=1,max_length=128,pattern=r"^[A-Za-z0-9._:-]+$")):
+        jid,state=jobs.submit(engine,owner,idempotency_key,payload,clock.now(),settings.pending_job_limit)
+        return {"id":jid,"status":state,"status_url":f"/api/jobs/{jid}"}
+
+    @app.get("/api/jobs/{job_id}")
+    async def read_job(job_id: str, owner: str = Depends(authenticated)):
+        return jobs.get_job(engine,owner,job_id,clock.now())
+
+    @app.post("/api/jobs/{job_id}/cancel")
+    async def cancel_job(job_id: str, owner: str = Depends(authenticated)):
+        return jobs.cancel(engine,owner,job_id,clock.now())
+
+    @app.get("/api/jobs")
+    async def list_jobs(owner: str = Depends(authenticated),limit: int = Query(default=20,ge=1,le=100),
+                        offset: int = Query(default=0,ge=0)):
+        with engine.connect() as conn:
+            rows=conn.execute(text('SELECT id,state,created_at,deadline_at,attempt_count FROM jobs WHERE owner_id=:owner '
+                                   'ORDER BY created_at DESC,id LIMIT :limit OFFSET :offset'),
+                              dict(owner=owner,limit=limit,offset=offset)).mappings().all()
+        return {"mode":"demo","items":[dict(r) for r in rows]}
+
+    @app.post("/api/operator/endpoints/{endpoint_id}/enable",dependencies=[Depends(operator)])
+    async def enable_endpoint(endpoint_id: str):
+        if not enable(engine,endpoint_id):
+            return error(404,"Endpoint not found","endpoint_not_found")
+        return {"endpoint_id":endpoint_id,"healthy":True,"mode":"demo"}
+
+    @app.post("/v1/chat/completions", dependencies=[Depends(authenticated), Depends(interactive_slot)])
     async def completion(payload: ChatRequest, request: Request):
         for header in request.headers:
             if header.startswith("x-carbon-") and header != "x-carbon-priority":
                 return error(422, "Unsupported routing header", "unsupported_policy")
         if (request.headers.get("x-carbon-priority", "high") != "high"
                 or "x-task-type" in request.headers or "x-max-carbon" in request.headers):
-            return error(422, "Deferred policies require /api/jobs (planned for M3)", "unsupported_policy")
+            return error(422, "Deferred policies require /api/jobs", "unsupported_policy")
         request_id = "req_" + uuid4().hex
         with engine.begin() as conn:
             endpoints = conn.execute(text("SELECT * FROM endpoints ORDER BY latency_rank, id")).mappings().all()
             decision = interactive_decision(request_id, payload.model, endpoints)
             selected = next((e for e in endpoints if e["id"] == decision.selected_endpoint), None)
-            conn.execute(text("INSERT INTO decisions VALUES (:id,:at,:data)"),
+            conn.execute(text("INSERT INTO decisions (request_id,created_at,data) VALUES (:id,:at,:data)"),
                          dict(id=request_id, at=utcnow(), data=decision.model_dump_json()))
             if selected:
                 attempt_id = "attempt_" + uuid4().hex
@@ -137,6 +201,7 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
                              dict(id=attempt_id, request=request_id, endpoint=selected["id"], at=utcnow()))
         if not selected:
             return error(503, "No eligible simulated endpoint for this model", "no_eligible_endpoint")
+        failure = None
         outcome, usage, upstream_id, uncertain = "failed", None, None, False
         try:
             adapted = await execute(app.state.client, settings, selected["region"], payload, request_id)
@@ -144,16 +209,18 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
             outcome = "succeeded"
             result = JSONResponse(adapted.completion)
         except UpstreamFailure as exc:
+            failure = exc
             uncertain = exc.uncertain
             outcome = "unknown" if uncertain else "failed"
             result = error(exc.status, exc.message, exc.code)
-            if exc.retry_after:
+            if exc.retry_after and exc.retry_after.isdigit():
                 result.headers["retry-after"] = exc.retry_after
         with engine.begin() as conn:
             conn.execute(text("UPDATE attempts SET ended_at=:at,outcome=:outcome,usage=:usage,"
                               "upstream_request_id=:upstream,uncertain=:uncertain WHERE id=:id"),
                          dict(at=utcnow(), outcome=outcome, usage=json.dumps(usage) if usage else None,
                               upstream=upstream_id, uncertain=uncertain, id=attempt_id))
+        record_outcome(engine,selected["id"],failure,clock.now())
         result.headers["x-greenroute-request-id"] = request_id
         result.headers["x-greenroute-region"] = selected["region"]
         result.headers["x-greenroute-mode"] = "demo"

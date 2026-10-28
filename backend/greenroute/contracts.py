@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class StrictModel(BaseModel):
@@ -41,11 +41,16 @@ class JobPolicy(StrictModel):
 
     @field_validator("deadline_at")
     @classmethod
-    def future_deadline(cls, value, info: ValidationInfo):
-        now = (info.context or {}).get("now", datetime.now(timezone.utc))
-        if value.tzinfo is None or not 0 < (value - now).total_seconds() <= 86400:
-            raise ValueError("Deadline must be timezone-aware, future and within 24 hours")
+    def aware_deadline(cls, value):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Deadline must be timezone-aware")
         return value.astimezone(timezone.utc)
+
+    def ensure_submittable(self, now):
+        # Admission time is separate from parsing: persisted and idempotent jobs
+        # must remain readable after their deadline has passed.
+        if not 0 < (self.deadline_at - now).total_seconds() <= 86400:
+            raise ValueError("Deadline must be future and within 24 hours")
 
 
 class JobSubmission(StrictModel):
