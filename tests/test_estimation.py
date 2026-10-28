@@ -159,5 +159,6 @@ def test_scenario_auth_release_without_reset_and_restart(env):
 
 def test_live_mode_has_no_scenario_mutations(env):
     settings,_,clock,_=env
-    with TestClient(create_app(settings.model_copy(update={'mode':'live'}),clock=clock)) as client:
-        assert client.post('/api/demo/scenario',headers={'authorization':'Bearer operator-only-key'},json={'scenario':'clean'}).status_code==404
+    with pytest.raises(ValueError, match='manifest'):
+        with TestClient(create_app(settings.model_copy(update={'mode':'live'}),clock=clock)):
+            pass
