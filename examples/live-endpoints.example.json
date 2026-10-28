@@ -1,0 +1,27 @@
+{
+  "baseline_endpoint": "region-a",
+  "deployments": [
+    {
+      "id": "region-a",
+      "base_url": "https://region-a.example.invalid/v1",
+      "api_key_env": "VLLM_REGION_A_KEY",
+      "region": "REPLACE_WITH_VERIFIED_REGION_A",
+      "grid_zone": "REPLACE_WITH_APPROVED_ZONE_A",
+      "model_alias": "shared-model",
+      "served_model": "deployed-model-a",
+      "model_version": "REPLACE_WITH_IMMUTABLE_MODEL_REVISION",
+      "locality_evidence": "REPLACE_WITH_DEPLOYMENT_AND_PROCESSING_LOCALITY_EVIDENCE"
+    },
+    {
+      "id": "region-b",
+      "base_url": "https://region-b.example.invalid/v1",
+      "api_key_env": "VLLM_REGION_B_KEY",
+      "region": "REPLACE_WITH_VERIFIED_REGION_B",
+      "grid_zone": "REPLACE_WITH_APPROVED_ZONE_B",
+      "model_alias": "shared-model",
+      "served_model": "deployed-model-b",
+      "model_version": "REPLACE_WITH_IMMUTABLE_MODEL_REVISION",
+      "locality_evidence": "REPLACE_WITH_DEPLOYMENT_AND_PROCESSING_LOCALITY_EVIDENCE"
+    }
+  ]
+}
