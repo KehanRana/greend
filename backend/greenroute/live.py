@@ -1,4 +1,4 @@
-"""Offline-tested live adapter boundary. Deliberately not installed in the demo runtime."""
+"""Offline-tested live adapter boundary. Separate from the simulated runtime."""
 import asyncio
 import math
 import os
@@ -24,6 +24,8 @@ class Deployment(BaseModel):
     served_model: str = Field(min_length=1)
     model_version: str = Field(min_length=1)
     locality_evidence: str = Field(min_length=1)
+    locality_verified: bool = False
+    model_equivalence_verified: bool = False
 
     @field_validator('base_url')
     @classmethod

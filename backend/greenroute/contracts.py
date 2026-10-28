@@ -70,7 +70,7 @@ class DecisionRecord(StrictModel):
     eligible: list[str]
     excluded: dict[str, str]
     reason: str
-    mode: Literal["demo"] = "demo"
+    mode: Literal["demo", "live"] = "demo"
     policy_version: str = "interactive-v1"
     estimation_context: dict | None = None
 
@@ -86,7 +86,7 @@ class CarbonDecision(StrictModel):
     reason: str
     exceptions: list[str] = Field(default_factory=list)
     evaluated_at: datetime
-    mode: Literal["demo"] = "demo"
+    mode: Literal["demo", "live"] = "demo"
     policy_version: str = "carbon-v1"
     estimation_context: dict | None = None
 

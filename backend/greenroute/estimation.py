@@ -21,12 +21,12 @@ def capture_context(settings, model, endpoints, eligible, snapshots, now):
         evidence[e['id']] = None if snapshot is None else dict(id=snapshot.id,zone=snapshot.zone,
             intensity=snapshot.intensity,source=snapshot.source,mode=snapshot.mode,
             observed_at=snapshot.observed_at.isoformat(),retrieved_at=snapshot.retrieved_at.isoformat(),
-            status=signal_status(snapshot,now,settings.grid_max_age_seconds))
-    return dict(method_version=METHOD,bound_at=stamp(now),model=model,model_version='fixture-v1',
+            status=signal_status(snapshot,now,settings.grid_max_age_seconds,settings.mode))
+    return dict(method_version=METHOD,bound_at=stamp(now),model=model,model_version=next((e['model_version'] for e in endpoints if e['id'] in eligible),None),
         baseline_endpoint=settings.baseline_endpoint,eligible=list(eligible),signals=evidence,
         energy_model_version=settings.energy_model_version,
         kwh_per_1000_tokens=settings.energy_kwh_per_1000_tokens,
-        energy_is_illustrative=True,usage_provenance='simulated_usage',mode=settings.mode)
+        energy_is_illustrative=True,usage_provenance='simulated_usage' if settings.mode == 'demo' else 'provider_reported_usage',mode=settings.mode)
 
 
 def calculate(context, selected, usage):
@@ -98,7 +98,7 @@ def public_estimate(row):
         selected_endpoint=row['selected_endpoint'],mode=row['mode'],created_at=row['created_at'])
 
 
-def metrics(engine, owner, mode, now):
+def metrics(engine, owner, mode, now, runtime_mode="demo"):
     with engine.connect() as conn:
         rows=list(conn.execute(text("SELECT a.id AS attempt_id,a.started_at,e.* FROM attempts a "
             "JOIN decisions d ON d.request_id=a.request_id LEFT JOIN emissions_estimates e ON e.execution_id=a.id "
@@ -106,7 +106,7 @@ def metrics(engine, owner, mode, now):
         queue=dict(conn.execute(text('SELECT state,COUNT(*) FROM jobs WHERE owner_id=:owner GROUP BY state'),dict(owner=owner)).all())
         outcomes=dict(conn.execute(text("SELECT a.outcome,COUNT(*) FROM attempts a JOIN decisions d ON d.request_id=a.request_id "
             "WHERE COALESCE(json_extract(d.data,'$.mode'),'demo')=:mode GROUP BY a.outcome"),dict(mode=mode)).all())
-    if mode != 'demo':
+    if mode != runtime_mode:
         queue={}
     available=[r for r in rows if r['status']=='available' and r['mode']==mode]
     def total(field):
@@ -130,4 +130,4 @@ def metrics(engine, owner, mode, now):
         estimated_difference_g_per_1000_tokens=float((baseline-actual)*1000/token_sum) if token_sum else None,
         estimation_groups=list(groups.values()),outcomes=outcomes,owner_job_states=queue,
         first_execution_at=min((r['started_at'] for r in rows),default=None),
-        note='Simulated operational estimates; excludes failed attempts, networking, cooling and embodied impacts. No measured avoided emissions.')
+        note=('Simulated' if mode == 'demo' else 'Illustrative') + ' operational estimates; excludes failed attempts, networking, cooling and embodied impacts. No measured avoided emissions.')

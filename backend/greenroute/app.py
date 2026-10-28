@@ -24,6 +24,8 @@ from greenroute.endpoint_health import record_outcome, enable
 from greenroute.policy import interactive_decision
 from greenroute.inference import execute, UpstreamFailure
 from greenroute.store import make_engine, ready, utcnow
+from greenroute.runtime import check_runtime, policy_options, execute_endpoint
+from greenroute.live import ElectricityMapsAdapter
 
 
 def error(status, message, code):
@@ -34,15 +36,27 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
     settings = settings or Settings.from_env()
     engine = make_engine(settings.database)
     clock = clock or SystemClock()
-    poller = GridPoller(engine, grid_adapter or DatabaseFixtureGridAdapter(engine,clock), clock,
+    poller = GridPoller(engine, grid_adapter or (DatabaseFixtureGridAdapter(engine,clock) if settings.mode == "demo" else None), clock,
                         settings.grid_refresh_seconds, settings.grid_max_age_seconds,
-                        settings.grid_timeout_seconds)
+                        settings.grid_timeout_seconds, mode=settings.mode)
 
     @asynccontextmanager
     async def lifespan(app):
         async with httpx.AsyncClient(timeout=httpx.Timeout(settings.timeout_seconds, connect=5),
                                      transport=transport, trust_env=False) as client:
+            if settings.mode == 'live':
+                check_runtime(engine, settings)
+            else:
+                # Preserve degraded demo startup for /health and migration diagnostics.
+                try:
+                    check_runtime(engine, settings)
+                except (SQLAlchemyError, RuntimeError):
+                    pass
             app.state.client = client
+            if settings.mode == 'live':
+                poller.adapter = grid_adapter or ElectricityMapsAdapter(client,
+                    settings.electricitymaps_api_key, clock, settings.grid_timeout_seconds,
+                    settings.grid_max_age_seconds)
             await poller.refresh()
             poll_task = asyncio.create_task(poller.run(), name="grid-poller")
             try:
@@ -53,7 +67,7 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
                     await poll_task
         engine.dispose()
 
-    app = FastAPI(title="GreenRoute — simulated MVP", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="GreenRoute", version="0.1.0", lifespan=lifespan)
     app.state.engine = engine
     app.state.grid_poller = poller
 
@@ -107,6 +121,11 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
 
     @app.middleware("http")
     async def body_limit(request, call_next):
+        if request.url.path not in {'/health', '/ready'}:
+            try:
+                check_runtime(engine, settings)
+            except Exception:
+                return error(503, "Runtime storage or configuration unavailable", "not_ready")
         if request.method == "POST":
             body = bytearray()
             async for chunk in request.stream():
@@ -123,7 +142,7 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
     @app.get("/ready")
     async def readiness():
         try:
-            ready(engine)
+            check_runtime(engine, settings)
         except Exception:
             return error(503, "Storage unavailable or migrations required", "not_ready")
         return {"status": "ready", "mode": settings.mode}
@@ -131,7 +150,7 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
     @app.get("/api/regions", dependencies=[Depends(authenticated)])
     async def regions():
         try:
-            snapshots = latest_snapshots(engine)
+            snapshots = latest_snapshots(engine, settings.mode)
             with engine.connect() as conn:
                 endpoints = conn.execute(text("SELECT * FROM endpoints ORDER BY latency_rank,id")).mappings().all()
         except Exception:
@@ -140,7 +159,7 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
         items = []
         for endpoint in endpoints:
             snapshot = snapshots.get(endpoint["grid_zone"])
-            status = signal_status(snapshot, now, settings.grid_max_age_seconds)
+            status = signal_status(snapshot, now, settings.grid_max_age_seconds, settings.mode)
             items.append(dict(endpoint_id=endpoint["id"], region=endpoint["region"],
                 grid_zone=endpoint["grid_zone"], model=endpoint["model"],
                 model_version=endpoint["model_version"], healthy=bool(endpoint["healthy"]),
@@ -152,11 +171,11 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
                 retrieved_at=snapshot.retrieved_at.isoformat() if snapshot else None,
                 age_seconds=(now-snapshot.observed_at).total_seconds() if snapshot else None,
                 quality_flags=list(snapshot.quality_flags) if snapshot else []))
-        return {"mode": "demo", "evaluated_at": now.isoformat(), "poller": poller.metadata(), "items": items}
+        return {"mode": settings.mode, "evaluated_at": now.isoformat(), "poller": poller.metadata(), "items": items}
 
     @app.get("/api/metrics")
-    async def read_metrics(owner: str = Depends(authenticated), mode: Literal['demo','live'] = 'demo'):
-        return metrics(engine,owner,mode,clock.now()) | {'configuration':{
+    async def read_metrics(owner: str = Depends(authenticated), mode: Literal['demo','live'] | None = None):
+        return metrics(engine,owner,mode or settings.mode,clock.now(),settings.mode) | {'configuration':{
             'baseline_endpoint':settings.baseline_endpoint,'energy_model_version':settings.energy_model_version,
             'kwh_per_1000_tokens':settings.energy_kwh_per_1000_tokens}}
 
@@ -164,7 +183,7 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
     async def current_scenario():
         if settings.mode != 'demo':
             return error(404,"Demo controls unavailable","not_found")
-        return {"mode":"demo",**read_scenario(engine)}
+        return {"mode":settings.mode,**read_scenario(engine)}
 
     @app.post("/api/demo/scenario",dependencies=[Depends(operator)])
     async def change_scenario(payload: DemoScenario):
@@ -174,7 +193,7 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
             return error(409,"Custom source cannot be changed by demo controls","custom_grid_source")
         set_scenario(engine,payload.scenario,clock.now())
         refreshed=await poller.refresh()
-        return {"mode":"demo","refreshed":refreshed,**read_scenario(engine)}
+        return {"mode":settings.mode,"refreshed":refreshed,**read_scenario(engine)}
 
     @app.post("/api/jobs",status_code=202)
     async def submit_job(payload: JobSubmission, owner: str = Depends(authenticated),
@@ -184,7 +203,7 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
 
     @app.get("/api/jobs/{job_id}")
     async def read_job(job_id: str, owner: str = Depends(authenticated)):
-        return jobs.get_job(engine,owner,job_id,clock.now())
+        return jobs.get_job(engine,owner,job_id,clock.now()) | {"mode": settings.mode}
 
     @app.post("/api/jobs/{job_id}/cancel")
     async def cancel_job(job_id: str, owner: str = Depends(authenticated)):
@@ -199,13 +218,17 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
                                    "WHERE j.owner_id=:owner AND (:pending=0 OR j.state IN ('queued','waiting_for_carbon','running','retry_pending')) "
                                    "ORDER BY j.created_at DESC,j.id LIMIT :limit OFFSET :offset"),
                               dict(owner=owner,limit=limit,offset=offset,pending=pending)).mappings().all()
-        return {"mode":"demo","items":[dict(r) for r in rows]}
+        return {"mode":settings.mode,"items":[dict(r) for r in rows]}
 
     @app.post("/api/operator/endpoints/{endpoint_id}/enable",dependencies=[Depends(operator)])
     async def enable_endpoint(endpoint_id: str):
+        if settings.mode == 'live':
+            manifest = check_runtime(engine, settings)
+            if endpoint_id not in {d.id for d in manifest.deployments}:
+                return error(404,"Endpoint not approved","endpoint_not_found")
         if not enable(engine,endpoint_id):
             return error(404,"Endpoint not found","endpoint_not_found")
-        return {"endpoint_id":endpoint_id,"healthy":True,"mode":"demo"}
+        return {"endpoint_id":endpoint_id,"healthy":True,"mode":settings.mode}
 
     @app.post("/v1/chat/completions", dependencies=[Depends(authenticated), Depends(interactive_slot)])
     async def completion(payload: ChatRequest, request: Request):
@@ -218,11 +241,11 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
         request_id = "req_" + uuid4().hex
         with engine.begin() as conn:
             endpoints = conn.execute(text("SELECT * FROM endpoints ORDER BY latency_rank, id")).mappings().all()
-            decision = interactive_decision(request_id, payload.model, endpoints)
+            decision = interactive_decision(request_id, payload.model, endpoints, **policy_options(settings))
             selected = next((e for e in endpoints if e["id"] == decision.selected_endpoint), None)
             if selected:
                 decision.estimation_context=capture_context(settings,payload.model,endpoints,decision.eligible,
-                                                             latest_snapshots(engine),clock.now())
+                                                             latest_snapshots(engine, settings.mode),clock.now())
             conn.execute(text("INSERT INTO decisions (request_id,created_at,data) VALUES (:id,:at,:data)"),
                          dict(id=request_id, at=jobs.stamp(clock.now()), data=decision.model_dump_json()))
             if selected:
@@ -231,11 +254,11 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
                                   "VALUES (:id,:request,:endpoint,:at,'running',0)"),
                              dict(id=attempt_id, request=request_id, endpoint=selected["id"], at=jobs.stamp(clock.now())))
         if not selected:
-            return error(503, "No eligible simulated endpoint for this model", "no_eligible_endpoint")
+            return error(503, "No eligible endpoint for this model", "no_eligible_endpoint")
         failure = None
         outcome, usage, upstream_id, uncertain = "failed", None, None, False
         try:
-            adapted = await execute(app.state.client, settings, selected["region"], payload, request_id)
+            adapted = await execute_endpoint(app.state.client, settings, selected["id"], selected["region"], payload, request_id)
             usage, upstream_id = adapted.usage, adapted.upstream_request_id
             outcome = "succeeded"
             result = JSONResponse(adapted.completion)
@@ -256,7 +279,7 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
         record_outcome(engine,selected["id"],failure,clock.now())
         result.headers["x-greenroute-request-id"] = request_id
         result.headers["x-greenroute-region"] = selected["region"]
-        result.headers["x-greenroute-mode"] = "demo"
+        result.headers["x-greenroute-mode"] = settings.mode
         return result
 
     @app.get("/api/activity", dependencies=[Depends(authenticated)])
@@ -269,14 +292,14 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
             ids=[r['execution_id'] for r in rows if r['execution_id']]
             estimates={r['execution_id']:r for r in conn.execute(text('SELECT * FROM emissions_estimates WHERE execution_id IN :ids')
                 .bindparams(bindparam('ids',expanding=True)),dict(ids=ids)).mappings()} if ids else {}
-        return {"mode": "demo", "items": [dict(request_id=r["request_id"], created_at=r["created_at"],
+        return {"mode": settings.mode, "items": [dict(request_id=r["request_id"], created_at=r["created_at"],
                     decision=json.loads(r["data"]), outcome=r["outcome"],estimate=public_estimate(estimates.get(r["execution_id"])),
                     usage=json.loads(r["usage"]) if r["usage"] else None, uncertain=bool(r["uncertain"])) for r in rows]}
 
     from fastapi.staticfiles import StaticFiles
     from fastapi.responses import RedirectResponse
     frontend=Path(__file__).resolve().parents[2]/'frontend'/'dist'
-    if frontend.is_dir():
+    if frontend.is_dir() and settings.mode == "demo":
         app.mount('/dashboard',StaticFiles(directory=frontend,html=True),name='dashboard')
         @app.get('/',include_in_schema=False)
         async def dashboard():

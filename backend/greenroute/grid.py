@@ -37,13 +37,13 @@ class Snapshot:
     quality_flags: tuple[str, ...] = ()
 
 
-def signal_status(snapshot: Snapshot | None, now: datetime, max_age_seconds=300) -> str:
+def signal_status(snapshot: Snapshot | None, now: datetime, max_age_seconds=300, mode="demo") -> str:
     now = require_aware(now)
     if snapshot is None:
         return "unavailable"
     if (snapshot.quality_flags or snapshot.intensity is None
             or not math.isfinite(snapshot.intensity) or snapshot.intensity < 0
-            or not snapshot.source or snapshot.mode != "demo"):
+            or not snapshot.source or snapshot.mode != mode):
         return "invalid"
     observed = require_aware(snapshot.observed_at)
     retrieved = require_aware(snapshot.retrieved_at)
@@ -83,11 +83,11 @@ class FixtureGridAdapter:
             raise GridAdapterError("Fixture has no approved mapping for requested zone") from None
 
 
-def latest_snapshots(engine) -> dict[str, Snapshot]:
+def latest_snapshots(engine, mode="demo") -> dict[str, Snapshot]:
     with engine.connect() as conn:
         rows = conn.execute(text("SELECT * FROM (SELECT *, ROW_NUMBER() OVER "
             "(PARTITION BY zone ORDER BY retrieved_at DESC, rowid DESC) AS rank "
-            "FROM grid_snapshots) WHERE rank=1")).mappings().all()
+            "FROM grid_snapshots WHERE mode=:mode) WHERE rank=1"), dict(mode=mode)).mappings().all()
     return {r["zone"]: Snapshot(id=r["id"], zone=r["zone"], intensity=r["intensity"],
         observed_at=datetime.fromisoformat(r["observed_at"]),
         retrieved_at=datetime.fromisoformat(r["retrieved_at"]), source=r["source"],
@@ -96,8 +96,9 @@ def latest_snapshots(engine) -> dict[str, Snapshot]:
 
 class GridPoller:
     def __init__(self, engine, adapter: GridAdapter, clock: Clock, refresh_seconds=60,
-                 max_age_seconds=300, timeout_seconds=5):
+                 max_age_seconds=300, timeout_seconds=5, mode="demo"):
         self.engine, self.adapter, self.clock = engine, adapter, clock
+        self.mode = mode
         self.refresh_seconds = refresh_seconds
         self.max_age_seconds = max_age_seconds
         self.timeout_seconds = timeout_seconds
@@ -130,7 +131,7 @@ class GridPoller:
                     observed = require_aware(observation.observed_at)
                     if observed > retrieved:
                         flags.append("future_observation")
-                    if not observation.source or observation.mode != "demo":
+                    if not observation.source or observation.mode != self.mode:
                         flags.append("invalid_provenance")
                     conn.execute(text("INSERT INTO grid_snapshots "
                         "(id,zone,intensity,observed_at,retrieved_at,source,mode,quality_flags) "

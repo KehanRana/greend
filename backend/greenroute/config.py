@@ -1,12 +1,15 @@
 import os
 from pathlib import Path
 from urllib.parse import urlparse
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr, field_validator, model_validator
 
 
 class Settings(BaseModel):
     model_config = ConfigDict(hide_input_in_errors=True)
+    _bound_manifest: object = PrivateAttr(default=None)
     mode: str = "demo"
+    live_manifest: Path | None = None
+    electricitymaps_api_key: SecretStr | None = None
     gateway_key: SecretStr
     database: Path = Path("runtime/greenroute.db")
     upstream_url: str = "http://127.0.0.1:8001"
@@ -44,13 +47,18 @@ class Settings(BaseModel):
             keys.append(self.operator_key.get_secret_value())
         if any(len(k) < 8 for k in keys) or len(keys) != len(set(keys)):
             raise ValueError("Client and operator keys must be distinct and at least 8 characters")
+        if self.mode == 'live':
+            if not self.live_manifest or not self.electricitymaps_api_key or not self.electricitymaps_api_key.get_secret_value().strip():
+                raise ValueError('Live manifest and grid credential are required')
+            if self.database.resolve() == Path('runtime/greenroute.db').resolve():
+                raise ValueError('Live mode requires an explicit separate database')
         return self
 
     @field_validator("mode")
     @classmethod
-    def demo_only(cls, value):
-        if value != "demo":
-            raise ValueError("This milestone supports demo mode only")
+    def supported_mode(cls, value):
+        if value not in {"demo", "live"}:
+            raise ValueError("Mode must be demo or live")
         return value
 
     @field_validator("gateway_key")

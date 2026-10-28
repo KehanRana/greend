@@ -21,6 +21,8 @@ from greenroute.inference import execute, UpstreamFailure
 from greenroute.jobs import cleanup, stamp, terminal_values
 from greenroute.policy import carbon_decision
 from greenroute.store import immediate, make_engine, ready
+from greenroute.runtime import check_runtime, policy_options, execute_endpoint
+from greenroute.live import VLLMAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,7 @@ logger = logging.getLogger(__name__)
 class Worker:
     def __init__(self, engine, settings, client, clock=None):
         self.engine,self.settings,self.client = engine,settings,client
+        check_runtime(engine, settings)
         self.clock = clock or SystemClock()
         self.tasks = set()
 
@@ -48,6 +51,7 @@ class Worker:
                          **terminal_values(now)))
 
     def claim(self, jid):
+        check_runtime(self.engine, self.settings)
         with immediate(self.engine) as conn:
             now = self.clock.now()
             job = conn.execute(text("SELECT * FROM jobs WHERE id=:id AND state IN ('queued','waiting_for_carbon','retry_pending')"),
@@ -64,9 +68,9 @@ class Worker:
             policy = JobPolicy.model_validate_json(job['policy'])
             request = ChatRequest.model_validate_json(job['payload'])
             decision_id = 'req_'+uuid4().hex
-            snapshots=latest_snapshots(self.engine)
+            snapshots=latest_snapshots(self.engine, self.settings.mode)
             d = carbon_decision(decision_id,request.model,endpoints,policy,snapshots,now,
-                                self.settings.grid_max_age_seconds)
+                                self.settings.grid_max_age_seconds, **policy_options(self.settings))
             if d.action == 'select':
                 d.estimation_context=capture_context(self.settings,request.model,endpoints,d.eligible,snapshots,now)
                 running=conn.execute(text("SELECT COUNT(*) FROM jobs WHERE state='running'")).scalar()
@@ -161,7 +165,7 @@ class Worker:
         return True
 
     async def execute_claim(self, claim):
-        call = asyncio.create_task(execute(self.client,self.settings,claim['region'],claim['payload'],claim['request_id']))
+        call = asyncio.create_task(execute_endpoint(self.client,self.settings,claim['endpoint'],claim['region'],claim['payload'],claim['request_id']))
         heartbeat = asyncio.create_task(self.heartbeat(claim))
         try:
             done,_ = await asyncio.wait({call,heartbeat},return_when=asyncio.FIRST_COMPLETED)
@@ -189,12 +193,19 @@ class Worker:
             success=False
             configuration_failure=False
             try:
-                async with asyncio.timeout(self.settings.timeout_seconds):
-                    response=await self.client.get(f"{self.settings.upstream_url}/{endpoint['region']}/health",
-                        headers={'authorization':f'Bearer {self.settings.upstream_key.get_secret_value()}'})
-                success=response.status_code == 200
-                configuration_failure=response.status_code in {401,403,404}
-            except (httpx.RequestError,TimeoutError):
+                if self.settings.mode == 'live':
+                    manifest = check_runtime(self.engine, self.settings)
+                    deployment = next(d for d in manifest.deployments if d.id == endpoint['id'])
+                    await VLLMAdapter(self.client,self.settings.timeout_seconds).probe(deployment)
+                    success = True
+                else:
+                    async with asyncio.timeout(self.settings.timeout_seconds):
+                        response=await self.client.get(f"{self.settings.upstream_url}/{endpoint['region']}/health",
+                            headers={'authorization':f'Bearer {self.settings.upstream_key.get_secret_value()}'},
+                            follow_redirects=False)
+                    success=response.status_code == 200
+                    configuration_failure=response.status_code in {401,403,404}
+            except (httpx.RequestError,TimeoutError,ValueError):
                 pass
             with immediate(self.engine) as conn:
                 conn.execute(text("UPDATE endpoints SET healthy=:healthy,consecutive_failures=:count,"
@@ -204,6 +215,7 @@ class Worker:
                          next=None if success or configuration_failure else stamp(now+timedelta(seconds=30))))
 
     async def tick(self):
+        check_runtime(self.engine, self.settings)
         for task in list(self.tasks):
             if task.done():
                 self.tasks.remove(task)
@@ -233,7 +245,7 @@ class Worker:
 async def main():
     settings=Settings.from_env()
     engine=make_engine(settings.database)
-    ready(engine)
+    check_runtime(engine,settings)
     stop=asyncio.Event()
     loop=asyncio.get_running_loop()
     for sig in (signal.SIGINT,signal.SIGTERM):
