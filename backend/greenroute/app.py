@@ -1,6 +1,7 @@
+import asyncio
 import json
 import secrets
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from uuid import uuid4
 
 import httpx
@@ -10,6 +11,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from greenroute.config import Settings
+from greenroute.clock import SystemClock
+from greenroute.grid import FixtureGridAdapter, GridPoller, latest_snapshots, signal_status
 from greenroute.contracts import ChatRequest
 from greenroute.policy import interactive_decision
 from greenroute.inference import execute, UpstreamFailure
@@ -20,20 +23,32 @@ def error(status, message, code):
     return JSONResponse({"error": {"message": message, "type": "gateway_error", "code": code}}, status_code=status)
 
 
-def create_app(settings=None, transport=None):
+def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
     settings = settings or Settings.from_env()
     engine = make_engine(settings.database)
+    clock = clock or SystemClock()
+    poller = GridPoller(engine, grid_adapter or FixtureGridAdapter(clock), clock,
+                        settings.grid_refresh_seconds, settings.grid_max_age_seconds,
+                        settings.grid_timeout_seconds)
 
     @asynccontextmanager
     async def lifespan(app):
         async with httpx.AsyncClient(timeout=httpx.Timeout(settings.timeout_seconds, connect=5),
                                      transport=transport, trust_env=False) as client:
             app.state.client = client
-            yield
+            await poller.refresh()
+            poll_task = asyncio.create_task(poller.run(), name="grid-poller")
+            try:
+                yield
+            finally:
+                poll_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await poll_task
         engine.dispose()
 
     app = FastAPI(title="GreenRoute — simulated MVP", version="0.1.0", lifespan=lifespan)
     app.state.engine = engine
+    app.state.grid_poller = poller
 
     async def authenticated(request: Request):
         if not secrets.compare_digest(request.headers.get("authorization", ""),
@@ -74,6 +89,31 @@ def create_app(settings=None, transport=None):
         except Exception:
             return error(503, "Storage unavailable or migrations required", "not_ready")
         return {"status": "ready", "mode": settings.mode}
+
+    @app.get("/api/regions", dependencies=[Depends(authenticated)])
+    async def regions():
+        try:
+            snapshots = latest_snapshots(engine)
+            with engine.connect() as conn:
+                endpoints = conn.execute(text("SELECT * FROM endpoints ORDER BY latency_rank,id")).mappings().all()
+        except Exception:
+            return error(503, "Regional metadata unavailable; check storage migrations", "regions_unavailable")
+        now = clock.now()
+        items = []
+        for endpoint in endpoints:
+            snapshot = snapshots.get(endpoint["grid_zone"])
+            status = signal_status(snapshot, now, settings.grid_max_age_seconds)
+            items.append(dict(endpoint_id=endpoint["id"], region=endpoint["region"],
+                grid_zone=endpoint["grid_zone"], model=endpoint["model"],
+                model_version=endpoint["model_version"], healthy=bool(endpoint["healthy"]),
+                locality=endpoint["locality"], latency_rank=endpoint["latency_rank"],
+                signal_status=status, intensity_gco2e_kwh=snapshot.intensity if snapshot else None,
+                snapshot_id=snapshot.id if snapshot else None, source=snapshot.source if snapshot else None,
+                observed_at=snapshot.observed_at.isoformat() if snapshot else None,
+                retrieved_at=snapshot.retrieved_at.isoformat() if snapshot else None,
+                age_seconds=(now-snapshot.observed_at).total_seconds() if snapshot else None,
+                quality_flags=list(snapshot.quality_flags) if snapshot else []))
+        return {"mode": "demo", "evaluated_at": now.isoformat(), "poller": poller.metadata(), "items": items}
 
     @app.post("/v1/chat/completions", dependencies=[Depends(authenticated)])
     async def completion(payload: ChatRequest, request: Request):

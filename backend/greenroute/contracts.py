@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 
 class StrictModel(BaseModel):
@@ -41,8 +41,8 @@ class JobPolicy(StrictModel):
 
     @field_validator("deadline_at")
     @classmethod
-    def future_deadline(cls, value):
-        now = datetime.now(timezone.utc)
+    def future_deadline(cls, value, info: ValidationInfo):
+        now = (info.context or {}).get("now", datetime.now(timezone.utc))
         if value.tzinfo is None or not 0 < (value - now).total_seconds() <= 86400:
             raise ValueError("Deadline must be timezone-aware, future and within 24 hours")
         return value.astimezone(timezone.utc)
@@ -67,3 +67,18 @@ class DecisionRecord(StrictModel):
     reason: str
     mode: Literal["demo"] = "demo"
     policy_version: str = "interactive-v1"
+
+
+class CarbonDecision(StrictModel):
+    request_id: str
+    action: Literal["select", "wait", "expire"]
+    selected_endpoint: str | None = None
+    eligible: list[str]
+    excluded: dict[str, str]
+    signal_statuses: dict[str, str]
+    snapshot_ids: dict[str, str]
+    reason: str
+    exceptions: list[str] = Field(default_factory=list)
+    evaluated_at: datetime
+    mode: Literal["demo"] = "demo"
+    policy_version: str = "carbon-v1"
