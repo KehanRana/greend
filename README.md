@@ -270,3 +270,7 @@ inspect signal freshness. See [read-only grid-access checks](guides/grid-access.
 Plan a small inference trial without network access using `python scripts/run_trial.py`.
 Execution requires `--execute`; see [bounded trials and evidence](guides/trials.md) for
 completion-token limits, preflight gates and report interpretation.
+
+The trial runner also supports `--kind batch` with explicit `--trial-id` and `--allowed-region`
+arguments. It reserves completion capacity for worker retries and records queue/dispatch evidence;
+see the batch section of [the trial guide](guides/trials.md).
