@@ -1,6 +1,6 @@
 # GreenRoute architecture and boundaries
 
-GreenRoute is a single-host, regional-grid-aware inference demonstrator. The API, worker and mock provider are separate processes sharing one SQLite database. Current inference, grid signals and token usage are simulated; the energy coefficient is illustrative.
+GreenRoute is a single-host, regional-grid-aware inference demonstrator. The API, worker and mock provider are separate processes sharing one SQLite database. The default demo simulates inference, grid signals and token usage; the energy coefficient is illustrative. An isolated live runtime connects reviewed vLLM deployments and Electricity Maps using a separate database, immutable manifest identity and explicit provenance. See [live integration](live-integration.md).
 
 ```mermaid
 flowchart LR
@@ -57,3 +57,17 @@ The gateway owns grid polling. If it stops, the worker can finish dispatched cal
 Defaults permit ten active worker jobs plus ten interactive requests per gateway. The benchmark measures ten interactive lanes and a separate ten-job worker drain, not simultaneous saturation of both pools. SQLite WAL, local disk and one worker are the supported deployment; no multi-host availability claim is made.
 
 Live inference requires separate endpoint locality/model evidence, grid entitlement and energy calibration. The normal services bind to loopback in documented commands. Remote TLS, enterprise identity, production tenant isolation and availability remain outside the verified scope.
+
+## Runtime identity and eligibility
+
+Migration 005 binds each database to demo or live mode. Live initialization requires an empty
+migrated database, reviewed regional locality/model equivalence and an explicit fixed baseline.
+The registry stores evidence references and equivalent model revisions, while secrets remain in
+environment variables. Gateway and worker validate registry metadata and a canonical manifest
+digest; operational circuit state is independent of approval. A process keeps its approved
+manifest in memory; manifest changes require a new isolated registry/database and process restart.
+
+The policy receives the expected mode/model revision, so freshness checks reject the other
+mode's observations. Cache reads also filter by mode. Successful live executions label usage as
+provider reported; captured estimation assumptions retain the actual configured model revision.
+The demo dashboard is served only in demo mode. Live inspection uses mode-labeled JSON APIs.

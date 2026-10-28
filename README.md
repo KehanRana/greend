@@ -1,6 +1,6 @@
 # GreenRoute
 
-Local, simulated inference gateway for the Micro-Grid Aware LLM Inference Scheduler project.
+Carbon-aware inference gateway with a local demo and isolated live-provider runtime.
 
 **Implemented:** SDK-compatible non-streaming text chat and persisted routing metadata (M1); timestamped grid fixtures, caching and carbon policies (M2); durable asynchronous jobs, owner-scoped polling/cancellation, independent worker, retries, leases, health and retention (M3).
 
@@ -8,7 +8,9 @@ Local, simulated inference gateway for the Micro-Grid Aware LLM Inference Schedu
 
 **Implemented M5:** isolated performance/failure verification, fresh lockfile-install rehearsal, requirements traceability and demo/recovery guides.
 
-**Remaining:** conditional live-provider integration (M6), subject to endpoint/grid access and locality/energy evidence. All regions point to one local mock. There is no real inference, energy measurement or verified carbon reduction.
+**Implemented M6 preparation:** isolated live gateway/worker integration, reviewed endpoint registry, separate database identity and mode-labeled cache/estimates, tested with synthetic providers.
+
+**Remaining:** real-provider validation, subject to endpoint/grid access, locality review and a bounded trial budget. The default demo uses one local mock; no real inference or verified carbon reduction has been demonstrated. Energy coefficients remain illustrative.
 
 ## Quickstart
 
@@ -38,7 +40,7 @@ Apply migrations before starting or restarting services after an update:
 python -m alembic upgrade head
 ```
 
-Revision `002` adds grid mappings/quality; `003` adds job lifecycle/health; `004` adds estimate metadata and persistent scenarios. Existing M1/M2 records are preserved. Downgrading deletes the corresponding schema/data; use it only on disposable databases.
+Revision `002` adds grid mappings/quality; `003` adds job lifecycle/health; `004` adds estimate metadata and persistent scenarios; `005` adds database runtime identity and locality evidence. Existing M1/M2 records are preserved. Downgrading deletes the corresponding schema/data; use it only on disposable databases.
 
 Start the mock in terminal 1:
 
@@ -252,11 +254,11 @@ Both commands use disposable databases and their own loopback processes/credenti
 - [Operations and safe recovery](guides/operations.md)
 - [Demo walkthrough and handoff](guides/demo.md)
 
-The test-only `verification.fault_*` factories are not normal demo entry points. Live integration remains gated; no real grid/provider credentials, energy calibration or production deployment are included.
+The test-only `verification.fault_*` factories are not normal demo entry points. Real-provider validation remains gated; no real grid/provider credentials, energy calibration or production deployment are included.
 
 ## Live adapter preparation
 
-Offline-tested vLLM and Electricity Maps v4 adapters and a zero-network configuration checker
-are available. The gateway remains demo-only; live provider feasibility and runtime integration
-are pending access and locality review. See [live integration preparation](guides/live-integration.md)
+The gateway and worker support a separate, explicitly initialized live database with reviewed
+vLLM deployments and Electricity Maps v4 signals. End-to-end behavior is tested offline; real
+provider feasibility is pending access and locality review. The dashboard remains demo-only. See [live integration preparation](guides/live-integration.md)
 for configuration, tests, boundaries and remaining activation gates.

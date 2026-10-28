@@ -1,77 +1,126 @@
-# Live integration preparation (M6 / B-15)
+# Isolated live runtime (M6 / B-15)
 
-Status: adapters and offline contracts implemented; live feasibility is **pending**.
-No provider access, regional deployments, approved zone mappings or credentials were supplied.
-The gateway and worker still accept demo mode only. These adapters are library boundaries,
-not a switch that enables live routing. This prevents real usage or signals entering the
-simulated dashboard, cache and emissions ledger before runtime isolation is implemented.
+Status: gateway, worker, adapters and mode isolation are implemented and tested with synthetic
+HTTP providers. Real-provider feasibility is **pending**: no provider access, regional deployments,
+approved zone mappings or credentials were supplied. No real grid or inference requests have
+been made during this implementation. Live energy estimates remain illustrative.
 
-## Configure and check without network access
+## Review the deployment manifest
 
-Copy `examples/live-endpoints.example.json` to a local deployment manifest. Replace all
-example hosts, region/zone placeholders, model revisions and locality evidence with reviewed
-values. No AWS-to-grid-zone mappings are inferred. Use the same model alias and immutable
-revision across deployments; regional served model names may differ. Select a fixed baseline.
-The checker validates declaration consistency; it cannot prove those declarations are true.
+Copy `examples/live-endpoints.example.json` to a local manifest. Replace every example host,
+region/zone placeholder, model revision and locality evidence reference. Use the same public
+model alias and immutable revision across deployments; served model names may differ.
+Manifest order specifies interactive latency preference; it is administrator configured,
+not automatically measured. Select an explicit fixed baseline in the manifest and settings.
+
+A reviewer must establish regional processing locality and model/template equivalence before
+setting both `locality_verified` and `model_equivalence_verified` to `true` for every deployment.
+These default to false. They record administrator attestations, not automated verification.
+A model-discovery probe cannot prove locality or equivalence. Example placeholders cannot
+be activated. No AWS-to-grid-zone mappings are inferred.
 
 ```sh
 python scripts/check_live_config.py examples/live-endpoints.example.json
 ```
 
-This command always performs zero network requests, including when environment credentials
-are present. It reports only booleans for credential availability, never secret values,
-URLs, provider responses or environment-variable contents. Placeholder/example manifests
-are structurally valid but are not evidence of live readiness.
+This checker always makes zero network requests. It checks structure and credential presence,
+reports review booleans and never emits credentials, URLs or provider responses. A structurally
+valid example is not live-ready. Do not put keys in JSON or URLs; manifests contain only
+credential environment variable names. Keep manifests private if evidence references are sensitive.
 
-When access becomes available, put each regional vLLM key in its declared environment
-variable and the grid key in `ELECTRICITYMAPS_API_KEY`. Do not put keys in JSON, URLs,
-commits, screenshots or issue comments. The example contains environment variable **names** only.
-The existing demo `.env` and `Settings` remain unchanged.
+## Initialize a separate database
 
-## Adapter contracts
-
-`greenroute.live.VLLMAdapter` accepts administrator-supplied HTTPS `/v1` deployments.
-`probe()` reads authenticated `/v1/models` and checks the exact served model ID. A successful
-probe does not verify locality, GPU hardware, model revision or chat-template equivalence.
-`execute()` maps the public alias to that deployment's served model and reuses the gateway's
-nonstreaming completion validation, token usage parsing and uncertain-execution/retry contract.
-Redirects are disabled, keys are resolved from the environment and no caller headers are forwarded.
-There is no automatic inference retry, cross-region fallback or automatic billed probe.
-Callers must create an `httpx.AsyncClient(trust_env=False)` and close it after use.
-
-`ElectricityMapsAdapter` reads v4 `/carbon-intensity/latest` with explicit zones, lifecycle
-emission factors, flow-traced consumption accounting and IP lookup disabled. It preserves
-`datetime` as the observation time and marks observations `live`; `updatedAt` is not substituted.
-Responses with mismatched zones/accounting, invalid values, future/naive/stale timestamps,
-provider errors or redirects fail the whole batch with a sanitized error. No demo fallback
-or hidden retry occurs. The caller owns polling/backoff/cache and credential provisioning.
-The freshness default is 300 seconds; confirm purchased temporal granularity and availability
-before choosing a reviewed freshness policy. Hourly signals may legitimately fail that limit.
-The demo poller deliberately rejects live provenance; do not attach this adapter to it.
-
-## Remaining gates before live runtime activation
-
-1. Confirm API entitlement, rate limits, temporal granularity and authoritative zone mappings.
-2. Review regional processing locality evidence, model revision/template equivalence and endpoint security.
-3. Agree an inference/token/request budget and real experiment procedure.
-4. Implement and test separate live registry/database, policy eligibility, cache partitioning,
-   worker health checks, API provenance and dashboard labeling before enabling live mode.
-5. Perform read-only model/grid probes, then an authorized bounded completion with actual
-   provider IDs, usage and source timestamps. Exercise auth, rate-limit, outage and stale data paths.
-6. Record the fixed-baseline comparison. Energy coefficients remain illustrative until calibrated;
-   live grid data and token usage alone do not establish measured emissions or avoided carbon.
-
-## Offline evidence
+Only perform these steps after access, regional reviews, API entitlement/rate limits and an
+inference budget are established. Commands below are the activation procedure, not a report
+that activation has occurred. Use a separate terminal/environment from the demo processes.
+The application does not automatically load `.env` files.
 
 ```sh
-python -m pytest tests/test_live.py -q
+export PYTHONPATH=backend
+export GREENROUTE_MODE=live
+export GREENROUTE_DATABASE=runtime/live.db
+export GREENROUTE_LIVE_MANIFEST=/absolute/path/to/reviewed-endpoints.json
+export GREENROUTE_BASELINE_ENDPOINT=region-a
+# Set GREENROUTE_GATEWAY_KEY, optional distinct GREENROUTE_OPERATOR_KEY,
+# GREENROUTE_ELECTRICITYMAPS_API_KEY and each manifest-declared vLLM key securely.
+alembic upgrade head
+python -m greenroute.runtime
+uvicorn greenroute.app:create_app --factory --host 127.0.0.1 --port 8000
+# In another terminal with the same live configuration:
+python -m greenroute.worker
+```
+
+Migration 005 adds a database runtime identity, defaulting existing databases to demo.
+Initialization makes no network requests and replaces seeded demo endpoints only when the
+migrated database has no jobs, decisions, attempts, snapshots or estimates. It refuses to
+repurpose a database with execution evidence. Reinitialization with the same manifest is
+idempotent; a changed manifest requires a new live database. The default demo database path
+is disallowed for live settings. Never run live migration commands against the demo database.
+
+Startup binds a reviewed manifest digest to the database. Gateway and worker reject mismatched
+modes, manifest digests or registry metadata. Each running process retains its approved manifest
+in memory: changing the file does not redirect active traffic. Restarting with the changed file
+fails the digest check. Credential values are resolved from the environment, not persisted.
+Health/circuit fields remain mutable; operator enable cannot bypass registry approval.
+
+Starting the live gateway refreshes Electricity Maps immediately and periodically. Submitted
+chat requests and eligible jobs call the configured vLLM deployments and may incur cost.
+Initialization and the offline checker do not perform discovery or billed inference.
+
+## Runtime behavior
+
+Interactive chat routes to the first healthy, approved equivalent model by configured preference.
+Flexible jobs preserve region restrictions, freshness, carbon thresholds, deadlines, conservative
+retry rules and lease recovery. Batch jobs wait when signals are stale/unavailable unless their
+explicit deadline policy permits best-available execution. Latency-critical chat can proceed
+without a fresh carbon signal, with unavailable carbon comparisons explicitly excluded.
+
+The live gateway uses authenticated Electricity Maps v4 `/carbon-intensity/latest` with explicit
+zones, lifecycle factors, flow-traced consumption accounting and IP lookup disabled. It preserves
+`datetime` as the observation time; `updatedAt` is not substituted. Mismatched zones/accounting,
+invalid values and future/naive/stale timestamps reject the whole fetched batch. Provider errors
+retain the timestamped cache with bounded polling backoff. There is no demo fallback.
+Freshness defaults to 300 seconds: align this with purchased granularity and availability before
+a trial. Hourly data may legitimately fail that limit. Poll timeout bounds the entire batch.
+
+Regional vLLM calls map the public alias to a served model name, disable redirects and use only
+the regional credential plus gateway request identity. Nonstreaming text-chat validation and
+usage/error contracts are shared with the demo adapter. 401/403/404 disable a destination pending
+operator intervention; 429 follows bounded retry guidance for jobs; uncertain 5xx/transport
+outcomes are not automatically replayed. Circuit recovery checks authenticated `/v1/models`
+for the exact registered model; it does not generate a completion.
+
+## Data and UI isolation
+
+A database belongs to one mode. Grid cache reads filter by mode, routing requires matching
+snapshot provenance, and decisions, response headers, jobs, activity and estimates report that
+mode. Metrics default to the configured mode and exclude the other mode, including queue counts.
+Live usage is labeled `provider_reported_usage`; demo usage remains `simulated_usage`.
+Energy coefficients remain illustrative in both modes, and estimates are not measured avoided
+emissions. Failed/unknown executions do not contribute successful carbon comparisons.
+
+The existing dashboard and scenario controls are demo-specific. `/dashboard/` and demo controls
+are unavailable in live mode; use authenticated JSON APIs (`/api/regions`, `/api/jobs`,
+`/api/activity`, `/api/metrics`) for live inspection. A live dashboard is future work.
+
+## Validation and remaining trial gates
+
+```sh
+python -m pytest tests/test_live.py tests/test_live_runtime.py -q
 python -m pytest -q
 ```
 
-Tests use `httpx.MockTransport`, never real credentials or services. They cover source timestamps,
-explicit provenance, stale/future/invalid data, HTTP failures, redirect refusal, configuration
-constraints, alias mapping, regional authentication, missing credentials and retry semantics.
-These are synthetic contract tests, not recorded provider responses or real feasibility evidence.
+Tests use `httpx.MockTransport`, synthetic responses, isolated databases and deterministic clocks.
+They cover live chat/worker dispatch, dirty-grid waiting/release, auth/rate-limit/outage paths,
+stale-cache retention, model mapping, mode/manifest/registry rejection, disabled demo controls,
+cache/metrics provenance isolation and read-only model recovery. They are not recorded provider
+responses, real locality evidence or real feasibility results.
+
+Before a real trial: confirm entitlement/rate limits and zone mapping, review locality and model
+revision/template equivalence, agree a bounded token/request budget, probe discovery/grid access,
+then submit an authorized bounded completion. Record actual provider IDs, usage and timestamps
+and compare against the fixed baseline. Calibrate energy separately before claiming measured
+emissions. Do not present synthetic validation as an actual-provider milestone completion.
 
 API contracts checked 2026-10-28 against primary documentation:
 - [Electricity Maps v4 latest carbon intensity](https://app.electricitymaps.com/docs/reference/carbon-intensity/latest)

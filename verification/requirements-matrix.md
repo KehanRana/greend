@@ -17,7 +17,7 @@ Scope: local simulated MVP. “Verified” means the observable demo behavior pa
 | FR-11 | `test_estimation.py::test_known_arithmetic_and_secondary_comparison`, `test_dispatch_assumptions_are_immutable_and_deduplicated`, `test_aggregates_separate_modes_versions_exclusions_and_zero` | Verified arithmetic and evidence; energy/usage remains illustrative/simulated |
 | FR-12 | `test_grid.py::test_regions_api_and_interactive_independence`; `test_estimation.py::test_metrics_auth_empty_and_synchronous_persistence`; frontend stale-state test | Verified content-free metadata and empty/stale/degraded/error handling |
 | FR-13 | M4 production screenshots and seven-point review in `frontend/DESIGN.md`; frontend API-derived totals/cancellation tests | Verified overview map, textual values, source/evidence, deadlines and signed estimates |
-| FR-14 | `test_estimation.py::test_scenario_auth_release_without_reset_and_restart`, `test_live_mode_has_no_scenario_mutations`; 500-job benchmark | Verified persistent operator controls and deterministic synthetic replay; live mode unsupported |
+| FR-14 | `test_estimation.py::test_scenario_auth_release_without_reset_and_restart`, `test_live_mode_has_no_scenario_mutations`; 500-job benchmark | Verified persistent operator controls and deterministic synthetic replay; live scenario controls disabled; isolated live runtime tested with mocked providers |
 | FR-15 | `test_jobs.py::test_api_idempotency_deadline_and_owner_isolation`, `test_cancel_claim_race_and_competing_claims`, `test_http_date_retry_guidance_and_cancel_pending_retry` | Verified polling/output ownership and cancellation before dispatch |
 | FR-16 | `test_jobs.py::test_atomic_queue_capacity_and_duplicate_submissions`, `test_global_worker_limit_and_leases`, `test_queue_full_response_has_retry_guidance`, `test_interactive_capacity_rejects_without_upstream_call` | Verified configured caps, atomic capacity and 429 guidance |
 | FR-17 | `test_jobs.py::test_safe_retry_limit_and_backoff`, `test_adapter_failure_classification`, `test_retry_after_is_honored_and_never_retried_past_deadline`; physical 429/provider outage/SIGKILL cases | Verified bounded safe retries and unknown-state preservation; no exactly-once claim |
@@ -40,3 +40,16 @@ Scope: local simulated MVP. “Verified” means the observable demo behavior pa
 The latency runner alternates direct/gateway request order within ten lanes. It computes nearest-rank p95 from each pair's gateway RTT minus direct RTT, rather than subtracting the two marginal p95 values. Jitter remains, negative differences are preserved and raw pairs are retained. Both phases run on one Apple M4 host; regional network travel and real model computation are not represented.
 
 Batch drain starts immediately before the operator release request and includes its refresh, worker scheduling, completion writes and up to 250 ms polling detection delay. Admission is measured separately. A SQLite abort trigger represents admission write failure; it is not a physical disk-full test. Test-only grid fault timing is accelerated and disclosed in the JSON case evidence.
+
+## Offline live-runtime integration
+
+`tests/test_live_runtime.py` covers gateway/worker dispatch, threshold waiting and release,
+stale-cache behavior during grid auth/rate-limit/outage failures, inference 401/429/5xx handling,
+read-only circuit recovery, database identity and registry/manifest rejection, mode-separated
+cache and metrics, immutable process configuration and disabled demo controls. All providers
+are synthetic. This extends integration evidence without satisfying the real-provider/locality,
+entitlement, budget or calibrated-energy gates in B-15. See [live setup and limitations](../guides/live-integration.md).
+
+Current validation: **153 backend tests passed**. The post-integration local regression harness
+passed its performance and fault targets; see [live-runtime verification](live-runtime.md) and
+[the machine-readable regression report](live-runtime-regression.json).
