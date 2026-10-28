@@ -266,3 +266,7 @@ for configuration, tests, boundaries and remaining activation gates.
 To check Electricity Maps access while GPU quota approval is pending, run
 `python scripts/check_grid_access.py --env-file .env`. Add explicit `--zone` arguments to
 inspect signal freshness. See [read-only grid-access checks](guides/grid-access.md).
+
+Plan a small inference trial without network access using `python scripts/run_trial.py`.
+Execution requires `--execute`; see [bounded trials and evidence](guides/trials.md) for
+completion-token limits, preflight gates and report interpretation.
