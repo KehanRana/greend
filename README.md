@@ -253,3 +253,10 @@ Both commands use disposable databases and their own loopback processes/credenti
 - [Demo walkthrough and handoff](guides/demo.md)
 
 The test-only `verification.fault_*` factories are not normal demo entry points. Live integration remains gated; no real grid/provider credentials, energy calibration or production deployment are included.
+
+## Live adapter preparation
+
+Offline-tested vLLM and Electricity Maps v4 adapters and a zero-network configuration checker
+are available. The gateway remains demo-only; live provider feasibility and runtime integration
+are pending access and locality review. See [live integration preparation](guides/live-integration.md)
+for configuration, tests, boundaries and remaining activation gates.
