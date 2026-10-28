@@ -12,6 +12,10 @@ class Settings(BaseModel):
     upstream_key: SecretStr = SecretStr("demo-upstream-key")
     timeout_seconds: float = Field(default=60, gt=0, le=300)
 
+    grid_refresh_seconds: float = Field(default=60, ge=1, le=900)
+    grid_max_age_seconds: float = Field(default=300, gt=0, le=3600)
+    grid_timeout_seconds: float = Field(default=5, gt=0, le=60)
+
     @field_validator("mode")
     @classmethod
     def demo_only(cls, value):

@@ -1,0 +1,9 @@
+{
+  "source": "demo-fixture-v1",
+  "description": "Simulated regional signals; Frankfurt drops after 180 seconds. Not real grid data.",
+  "observation_interval_seconds": 60,
+  "frames": [
+    {"at_seconds": 0, "intensities": {"demo:virginia": 400, "demo:frankfurt": 300, "demo:sydney": 500}},
+    {"at_seconds": 180, "intensities": {"demo:virginia": 400, "demo:frankfurt": 80, "demo:sydney": 500}}
+  ]
+}
