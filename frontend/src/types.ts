@@ -1,0 +1,17 @@
+export type Signal = {id:string; zone:string; intensity:number|null; source:string; mode:string; observed_at:string; retrieved_at:string; status:string};
+export type Context = {baseline_endpoint:string; energy_model_version:string; kwh_per_1000_tokens:number; model_version:string; bound_at:string; signals:Record<string,Signal|null>};
+export type Decision = {selected_endpoint:string|null; reason:string; eligible:string[]; excluded:Record<string,string>; signal_statuses?:Record<string,string>; exceptions?:string[]; estimation_context?:Context};
+export type Estimate = {status:string; reason:string|null; energy_kwh:number|null; actual_g:number|null; baseline_g:number|null; difference_g:number|null; tokens:number|null; method_version:string; usage_provenance:string; assumptions:Context & {worst_region_comparison?:{endpoint:string;baseline_g:number;difference_g:number}|null}};
+export type Activity = {request_id:string; created_at:string; outcome:string|null; decision:Decision; estimate:Estimate|null; usage:Record<string,number>|null; uncertain:boolean};
+export type Region = {endpoint_id:string; region:string; grid_zone:string; healthy:boolean; locality:string; signal_status:string; intensity_gco2e_kwh:number|null; snapshot_id:string|null; source:string|null; observed_at:string|null; retrieved_at:string|null; age_seconds:number|null; disabled_reason:string|null};
+export type Regions = {mode:string; evaluated_at:string; poller:{status:string;last_error:string|null};items:Region[]};
+export type Job = {id:string; state:string; created_at:string; deadline_at:string; attempt_count:number; carbon_threshold:number|null; reason:string|null};
+export type Metrics = {mode:string;succeeded_executions:number;compared_executions:number;excluded_executions:number;excluded_reasons:Record<string,number>;estimated_actual_g:number;estimated_baseline_g:number;estimated_difference_g:number;compared_tokens:number;estimated_difference_g_per_1000_tokens:number|null;estimation_groups:{baseline_endpoint:string;energy_model_version:string;kwh_per_1000_tokens:number;model_version:string;executions:number}[];owner_job_states:Record<string,number>;outcomes:Record<string,number>;note:string;configuration:{baseline_endpoint:string;energy_model_version:string;kwh_per_1000_tokens:number}};
+export type Scenario = {scenario:'scheduled'|'high'|'clean';started_at:string|null;revision:string;mode:string};
+export const names:Record<string,string>={'us-east-1':'Northern Virginia','eu-central-1':'Frankfurt','ap-southeast-2':'Sydney'};
+export const shortNames:Record<string,string>={'us-east-1':'US East','eu-central-1':'Frankfurt','ap-southeast-2':'Sydney'};
+export const label=(value:string|null|undefined)=>value ? value.replaceAll('_',' ') : '—';
+export const count=(value:number|undefined)=>value === undefined ? '—' : value.toLocaleString();
+export const grams=(value:number|null|undefined)=>value == null ? '—' : value.toLocaleString(undefined,{minimumFractionDigits:6,maximumFractionDigits:6});
+export const date=(value:string|null)=>value ? new Date(value).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '—';
+export const shortId=(value:string)=>value.slice(0,4)+value.slice(4,11);

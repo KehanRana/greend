@@ -10,3 +10,8 @@ runtime/
 node_modules/
 frontend/dist/
 /docs/
+
+.taste-skill/
+*.tsbuildinfo
+frontend/test-results/
+frontend/playwright-report/
