@@ -6,7 +6,9 @@ Local, simulated inference gateway for the Micro-Grid Aware LLM Inference Schedu
 
 **Implemented M4:** versioned per-execution estimates, aggregate APIs, React dashboard, persistent grid scenarios and resumable synthetic batch replay.
 
-**Planned:** systematic performance/fault validation and final rehearsal (M5), conditional live-provider integration (M6). All regions point to one local mock. There is no real inference, energy measurement or verified carbon reduction.
+**Implemented M5:** isolated performance/failure verification, fresh lockfile-install rehearsal, requirements traceability and demo/recovery guides.
+
+**Remaining:** conditional live-provider integration (M6), subject to endpoint/grid access and locality/energy evidence. All regions point to one local mock. There is no real inference, energy measurement or verified carbon reduction.
 
 ## Quickstart
 
@@ -215,6 +217,7 @@ The run file contains synthetic bodies, deadlines and stable idempotency keys, w
 | `GREENROUTE_WORKER_POLL_SECONDS` | 10 |
 | `GREENROUTE_RETRY_BASE_SECONDS` | 2 |
 | `GREENROUTE_LEASE_SECONDS` | 120 |
+| `GREENROUTE_MOCK_DELAY_SECONDS` | 0 (verification uses 0.1) |
 | `GREENROUTE_BASELINE_ENDPOINT` | us-east-1 |
 | `GREENROUTE_ENERGY_KWH_PER_1000_TOKENS` | 0.001 |
 | `GREENROUTE_ENERGY_MODEL_VERSION` | illustrative-v1 |
@@ -228,3 +231,25 @@ npm run build --prefix frontend
 ```
 
 Tests use isolated temporary databases, deterministic clocks and real local process checks. See [M1 verification](docs/m1-verification.md), [M2 verification](docs/m2-verification.md) and [M3 verification](docs/m3-verification.md) and [M4 verification](docs/m4-verification.md) for evidence and boundaries. Load/latency targets and real grid/provider locality remain unverified.
+
+
+## Verified local targets and handoff
+
+On the recorded Apple M4 run, 1,000 matched direct/gateway pairs at concurrency ten gave **28.784 ms p95 added RTT** against the 100 ms target. A 500-job batch with a nominal 100 ms mock and ten worker slots drained in **16.172 seconds** against the 300-second target. The measurement subtracts each pair's RTTs; it is not a production latency guarantee.
+
+A fresh source-copy/venv/npm rehearsal passed **106 backend tests, 7 UI tests**, build and real-process SDK/job/restart/dashboard smoke. Process-fault checks cover worker SIGKILL after provider receipt, provider outage/recovery, 429 timing, admission write failure and stale-grid behavior. No optimization or SLO claim for a real regional provider follows from these results.
+
+```sh
+python scripts/run_verification.py
+python scripts/rehearse.py
+```
+
+Both commands use disposable databases and their own loopback processes/credentials. They do not use your live `.env` or existing services. The full runner takes about a minute on the recorded machine. Rehearsal installs pinned dependencies into a new temporary source tree. Use `--output runtime/my-report.json` to preserve the checked-in reports.
+
+- [Verification results and repeatable methodology](verification/README.md)
+- [Requirements-to-evidence matrix](verification/requirements-matrix.md)
+- [Architecture and transaction boundaries](guides/architecture.md)
+- [Operations and safe recovery](guides/operations.md)
+- [Demo walkthrough and handoff](guides/demo.md)
+
+The test-only `verification.fault_*` factories are not normal demo entry points. Live integration remains gated; no real grid/provider credentials, energy calibration or production deployment are included.
