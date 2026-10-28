@@ -76,7 +76,8 @@ def test_real_job_worker_and_pending_restart(tmp_path):
     env=os.environ | {'PYTHONPATH':'backend','GREENROUTE_GATEWAY_KEY':'process-jobs-key',
         'GREENROUTE_DATABASE':str(tmp_path/'jobs.db'),'GREENROUTE_MODE':'demo',
         'GREENROUTE_UPSTREAM_URL':f'http://127.0.0.1:{upstream_port}',
-        'GREENROUTE_UPSTREAM_KEY':'process-upstream-key','GREENROUTE_WORKER_POLL_SECONDS':'0.1'}
+        'GREENROUTE_UPSTREAM_KEY':'process-upstream-key','GREENROUTE_WORKER_POLL_SECONDS':'0.1',
+        'GREENROUTE_OPERATOR_KEY':'process-operator-key'}
     subprocess.run([sys.executable,'-m','alembic','upgrade','head'],env=env,check=True,capture_output=True)
     processes=[]
     def start(args):
@@ -122,6 +123,15 @@ def test_real_job_worker_and_pending_restart(tmp_path):
         example=subprocess.run([sys.executable,'examples/batch.py','--base-url',base],env=env,capture_output=True,text=True,timeout=10)
         assert example.returncode == 0, example.stderr
         assert 'Status: succeeded' in example.stdout
+        command=[sys.executable,'examples/demo_batch.py','--base-url',base,'--count','8','--release-clean',
+                 '--run-file',str(tmp_path/'replay.json')]
+        replay=subprocess.run(command,env=env,capture_output=True,text=True,timeout=20)
+        assert replay.returncode == 0,replay.stderr
+        assert '"succeeded": 8' in replay.stdout
+        before=httpx.get(base+'/api/metrics',headers=headers,trust_env=False).json()['succeeded_executions']
+        resumed=subprocess.run(command,env=env,capture_output=True,text=True,timeout=20)
+        assert resumed.returncode == 0,resumed.stderr
+        assert httpx.get(base+'/api/metrics',headers=headers,trust_env=False).json()['succeeded_executions'] == before
     finally:
         for process in reversed(processes):
             if process.poll() is None:
