@@ -262,3 +262,7 @@ The gateway and worker support a separate, explicitly initialized live database 
 vLLM deployments and Electricity Maps v4 signals. End-to-end behavior is tested offline; real
 provider feasibility is pending access and locality review. The dashboard remains demo-only. See [live integration preparation](guides/live-integration.md)
 for configuration, tests, boundaries and remaining activation gates.
+
+To check Electricity Maps access while GPU quota approval is pending, run
+`python scripts/check_grid_access.py --env-file .env`. Add explicit `--zone` arguments to
+inspect signal freshness. See [read-only grid-access checks](guides/grid-access.md).
