@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "profile": "clean-environment-rehearsal",
+  "started_at": "2026-10-28T08:11:09.834990+00:00",
+  "host": {
+    "os": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "architecture": "arm64",
+    "cpu": "Apple M4",
+    "logical_cpus": 10,
+    "python": "3.14.5"
+  },
+  "python_lock_sha256": "0e1b455a8d5ba36896ad44ade45ad9ecf3db9291e746b12078ece24552b1cec1",
+  "node_lock_sha256": "cbf947fe64352373876f634cc905592ba883be84e4354fce93ad3e3bb0eb67ce",
+  "steps": [
+    {
+      "name": "create fresh virtual environment",
+      "status": "passed",
+      "seconds": 1.25
+    },
+    {
+      "name": "install pinned Python dependencies",
+      "status": "passed",
+      "seconds": 4.706
+    },
+    {
+      "name": "check Python dependency consistency",
+      "status": "passed",
+      "seconds": 0.156
+    },
+    {
+      "name": "install pinned frontend dependencies",
+      "status": "passed",
+      "seconds": 0.915
+    },
+    {
+      "name": "build dashboard",
+      "status": "passed",
+      "seconds": 1.495
+    },
+    {
+      "name": "python tests",
+      "status": "passed",
+      "seconds": 10.507,
+      "summary": [
+        "........................................................................ [ 67%]",
+        "..................................                                       [100%]",
+        "106 passed in 10.10s"
+      ]
+    },
+    {
+      "name": "frontend tests",
+      "status": "passed",
+      "seconds": 0.948,
+      "summary": [
+        "",
+        " Test Files  1 passed (1)",
+        "      Tests  7 passed (7)",
+        "   Start at  19:11:29",
+        "   Duration  686ms (tests 58%, environment 24%, transform 9%, setup 6%, import 4%)"
+      ]
+    },
+    {
+      "name": "migrate/start/SDK/job/restart/dashboard smoke",
+      "status": "passed",
+      "seconds": 2.593
+    }
+  ],
+  "smoke": {
+    "status": "passed",
+    "official_sdk": true,
+    "pending_survives_api_restart": true,
+    "worker_completion": true,
+    "dashboard_assets_checked": 2,
+    "bundled_licenses": true,
+    "metadata_content_redacted": true
+  },
+  "status": "passed",
+  "node": "v22.14.0",
+  "npm": "10.9.2",
+  "elapsed_seconds": 23.277,
+  "finished_at": "2026-10-28T08:11:33.123731+00:00"
+}
