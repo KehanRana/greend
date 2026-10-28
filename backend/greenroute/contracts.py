@@ -72,6 +72,7 @@ class DecisionRecord(StrictModel):
     reason: str
     mode: Literal["demo"] = "demo"
     policy_version: str = "interactive-v1"
+    estimation_context: dict | None = None
 
 
 class CarbonDecision(StrictModel):
@@ -87,3 +88,8 @@ class CarbonDecision(StrictModel):
     evaluated_at: datetime
     mode: Literal["demo"] = "demo"
     policy_version: str = "carbon-v1"
+    estimation_context: dict | None = None
+
+
+class DemoScenario(StrictModel):
+    scenario: Literal['scheduled','high','clean']

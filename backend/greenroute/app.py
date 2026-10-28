@@ -3,18 +3,22 @@ import json
 import secrets
 from contextlib import asynccontextmanager, suppress
 from uuid import uuid4
+from pathlib import Path
+from typing import Literal
 
 import httpx
 from fastapi import Depends, FastAPI, Request, Query, Header
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
+from sqlalchemy import text, bindparam
 from sqlalchemy.exc import SQLAlchemyError
 
 from greenroute.config import Settings
 from greenroute.clock import SystemClock
 from greenroute.grid import FixtureGridAdapter, GridPoller, latest_snapshots, signal_status
-from greenroute.contracts import ChatRequest, JobSubmission
+from greenroute.contracts import ChatRequest, JobSubmission, DemoScenario
+from greenroute.estimation import capture_context, persist, public_estimate, metrics
+from greenroute.scenarios import DatabaseFixtureGridAdapter, read_scenario, set_scenario
 from greenroute import jobs
 from greenroute.endpoint_health import record_outcome, enable
 from greenroute.policy import interactive_decision
@@ -30,7 +34,7 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
     settings = settings or Settings.from_env()
     engine = make_engine(settings.database)
     clock = clock or SystemClock()
-    poller = GridPoller(engine, grid_adapter or FixtureGridAdapter(clock), clock,
+    poller = GridPoller(engine, grid_adapter or DatabaseFixtureGridAdapter(engine,clock), clock,
                         settings.grid_refresh_seconds, settings.grid_max_age_seconds,
                         settings.grid_timeout_seconds)
 
@@ -150,6 +154,28 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
                 quality_flags=list(snapshot.quality_flags) if snapshot else []))
         return {"mode": "demo", "evaluated_at": now.isoformat(), "poller": poller.metadata(), "items": items}
 
+    @app.get("/api/metrics")
+    async def read_metrics(owner: str = Depends(authenticated), mode: Literal['demo','live'] = 'demo'):
+        return metrics(engine,owner,mode,clock.now()) | {'configuration':{
+            'baseline_endpoint':settings.baseline_endpoint,'energy_model_version':settings.energy_model_version,
+            'kwh_per_1000_tokens':settings.energy_kwh_per_1000_tokens}}
+
+    @app.get("/api/demo/scenario",dependencies=[Depends(authenticated)])
+    async def current_scenario():
+        if settings.mode != 'demo':
+            return error(404,"Demo controls unavailable","not_found")
+        return {"mode":"demo",**read_scenario(engine)}
+
+    @app.post("/api/demo/scenario",dependencies=[Depends(operator)])
+    async def change_scenario(payload: DemoScenario):
+        if settings.mode != 'demo':
+            return error(404,"Demo controls unavailable","not_found")
+        if not isinstance(poller.adapter,DatabaseFixtureGridAdapter):
+            return error(409,"Custom source cannot be changed by demo controls","custom_grid_source")
+        set_scenario(engine,payload.scenario,clock.now())
+        refreshed=await poller.refresh()
+        return {"mode":"demo","refreshed":refreshed,**read_scenario(engine)}
+
     @app.post("/api/jobs",status_code=202)
     async def submit_job(payload: JobSubmission, owner: str = Depends(authenticated),
                          idempotency_key: str = Header(min_length=1,max_length=128,pattern=r"^[A-Za-z0-9._:-]+$")):
@@ -166,11 +192,13 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
 
     @app.get("/api/jobs")
     async def list_jobs(owner: str = Depends(authenticated),limit: int = Query(default=20,ge=1,le=100),
-                        offset: int = Query(default=0,ge=0)):
+                        offset: int = Query(default=0,ge=0),pending: bool = False):
         with engine.connect() as conn:
-            rows=conn.execute(text('SELECT id,state,created_at,deadline_at,attempt_count FROM jobs WHERE owner_id=:owner '
-                                   'ORDER BY created_at DESC,id LIMIT :limit OFFSET :offset'),
-                              dict(owner=owner,limit=limit,offset=offset)).mappings().all()
+            rows=conn.execute(text("SELECT j.id,j.state,j.created_at,j.deadline_at,j.attempt_count,json_extract(j.policy,'$.max_carbon_gco2e_kwh') AS carbon_threshold,"
+                                   "json_extract(d.data,'$.reason') AS reason FROM jobs j LEFT JOIN decisions d ON d.request_id=j.last_decision_id "
+                                   "WHERE j.owner_id=:owner AND (:pending=0 OR j.state IN ('queued','waiting_for_carbon','running','retry_pending')) "
+                                   "ORDER BY j.created_at DESC,j.id LIMIT :limit OFFSET :offset"),
+                              dict(owner=owner,limit=limit,offset=offset,pending=pending)).mappings().all()
         return {"mode":"demo","items":[dict(r) for r in rows]}
 
     @app.post("/api/operator/endpoints/{endpoint_id}/enable",dependencies=[Depends(operator)])
@@ -192,13 +220,16 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
             endpoints = conn.execute(text("SELECT * FROM endpoints ORDER BY latency_rank, id")).mappings().all()
             decision = interactive_decision(request_id, payload.model, endpoints)
             selected = next((e for e in endpoints if e["id"] == decision.selected_endpoint), None)
+            if selected:
+                decision.estimation_context=capture_context(settings,payload.model,endpoints,decision.eligible,
+                                                             latest_snapshots(engine),clock.now())
             conn.execute(text("INSERT INTO decisions (request_id,created_at,data) VALUES (:id,:at,:data)"),
-                         dict(id=request_id, at=utcnow(), data=decision.model_dump_json()))
+                         dict(id=request_id, at=jobs.stamp(clock.now()), data=decision.model_dump_json()))
             if selected:
                 attempt_id = "attempt_" + uuid4().hex
                 conn.execute(text("INSERT INTO attempts (id,request_id,endpoint_id,started_at,outcome,uncertain) "
                                   "VALUES (:id,:request,:endpoint,:at,'running',0)"),
-                             dict(id=attempt_id, request=request_id, endpoint=selected["id"], at=utcnow()))
+                             dict(id=attempt_id, request=request_id, endpoint=selected["id"], at=jobs.stamp(clock.now())))
         if not selected:
             return error(503, "No eligible simulated endpoint for this model", "no_eligible_endpoint")
         failure = None
@@ -218,8 +249,10 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
         with engine.begin() as conn:
             conn.execute(text("UPDATE attempts SET ended_at=:at,outcome=:outcome,usage=:usage,"
                               "upstream_request_id=:upstream,uncertain=:uncertain WHERE id=:id"),
-                         dict(at=utcnow(), outcome=outcome, usage=json.dumps(usage) if usage else None,
+                         dict(at=jobs.stamp(clock.now()), outcome=outcome, usage=json.dumps(usage) if usage else None,
                               upstream=upstream_id, uncertain=uncertain, id=attempt_id))
+            if outcome == 'succeeded':
+                persist(conn,attempt_id,decision.model_dump(),usage,clock.now())
         record_outcome(engine,selected["id"],failure,clock.now())
         result.headers["x-greenroute-request-id"] = request_id
         result.headers["x-greenroute-region"] = selected["region"]
@@ -229,12 +262,23 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
     @app.get("/api/activity", dependencies=[Depends(authenticated)])
     async def activity(limit: int = Query(default=20, ge=1, le=100), offset: int = Query(default=0, ge=0)):
         with engine.connect() as conn:
-            rows = conn.execute(text("SELECT d.request_id,d.created_at,d.data,a.outcome,a.usage,a.uncertain "
+            rows = conn.execute(text("SELECT d.request_id,d.created_at,d.data,a.outcome,a.usage,a.uncertain,a.id AS execution_id "
                                      "FROM decisions d LEFT JOIN attempts a ON a.request_id=d.request_id "
                                      "ORDER BY d.created_at DESC,d.request_id LIMIT :limit OFFSET :offset"),
                                 dict(limit=limit, offset=offset)).mappings().all()
+            ids=[r['execution_id'] for r in rows if r['execution_id']]
+            estimates={r['execution_id']:r for r in conn.execute(text('SELECT * FROM emissions_estimates WHERE execution_id IN :ids')
+                .bindparams(bindparam('ids',expanding=True)),dict(ids=ids)).mappings()} if ids else {}
         return {"mode": "demo", "items": [dict(request_id=r["request_id"], created_at=r["created_at"],
-                    decision=json.loads(r["data"]), outcome=r["outcome"],
+                    decision=json.loads(r["data"]), outcome=r["outcome"],estimate=public_estimate(estimates.get(r["execution_id"])),
                     usage=json.loads(r["usage"]) if r["usage"] else None, uncertain=bool(r["uncertain"])) for r in rows]}
 
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.responses import RedirectResponse
+    frontend=Path(__file__).resolve().parents[2]/'frontend'/'dist'
+    if frontend.is_dir():
+        app.mount('/dashboard',StaticFiles(directory=frontend,html=True),name='dashboard')
+        @app.get('/',include_in_schema=False)
+        async def dashboard():
+            return RedirectResponse('/dashboard/')
     return app

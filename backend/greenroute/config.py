@@ -25,6 +25,9 @@ class Settings(BaseModel):
     lease_seconds: float = Field(default=120, gt=0, le=900)
     client_keys: dict[str, SecretStr] = Field(default_factory=dict)
     operator_key: SecretStr | None = None
+    baseline_endpoint: str = Field(default='us-east-1',min_length=1,max_length=128)
+    energy_model_version: str = Field(default='illustrative-v1',min_length=1,max_length=64)
+    energy_kwh_per_1000_tokens: float = Field(default=0.001,gt=0,le=1,allow_inf_nan=False)
 
     @model_validator(mode="after")
     def validate_runtime(self):

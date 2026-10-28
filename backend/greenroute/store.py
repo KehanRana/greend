@@ -23,7 +23,7 @@ def make_engine(path):
 def ready(engine):
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        if version != "003":
+        if version != "004":
             raise RuntimeError("Run database migrations")
         conn.execute(text("SELECT id FROM endpoints LIMIT 1"))
 

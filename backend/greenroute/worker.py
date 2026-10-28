@@ -15,6 +15,7 @@ from greenroute.clock import SystemClock
 from greenroute.config import Settings
 from greenroute.contracts import ChatRequest, JobPolicy
 from greenroute.endpoint_health import record_outcome
+from greenroute.estimation import capture_context, persist
 from greenroute.grid import latest_snapshots
 from greenroute.inference import execute, UpstreamFailure
 from greenroute.jobs import cleanup, stamp, terminal_values
@@ -63,9 +64,11 @@ class Worker:
             policy = JobPolicy.model_validate_json(job['policy'])
             request = ChatRequest.model_validate_json(job['payload'])
             decision_id = 'req_'+uuid4().hex
-            d = carbon_decision(decision_id,request.model,endpoints,policy,latest_snapshots(self.engine),now,
+            snapshots=latest_snapshots(self.engine)
+            d = carbon_decision(decision_id,request.model,endpoints,policy,snapshots,now,
                                 self.settings.grid_max_age_seconds)
             if d.action == 'select':
+                d.estimation_context=capture_context(self.settings,request.model,endpoints,d.eligible,snapshots,now)
                 running=conn.execute(text("SELECT COUNT(*) FROM jobs WHERE state='running'")).scalar()
                 if running >= self.settings.worker_concurrency:
                     return None
@@ -150,6 +153,10 @@ class Worker:
                               'metadata_expires_at=:metadata WHERE id=:id'),
                 dict(id=claim['id'],state=state,result=json.dumps(result.completion) if result else None,
                      error=error,retry=retry_at,**terminal))
+            if result:
+                decision=json.loads(conn.execute(text('SELECT data FROM decisions WHERE request_id=:id'),
+                                    dict(id=claim['request_id'])).scalar_one())
+                persist(conn,claim['attempt'],decision,result.usage,now)
         record_outcome(self.engine,claim['endpoint'],failure,now)
         return True
 
