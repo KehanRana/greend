@@ -7,6 +7,8 @@ from uuid import uuid4
 from sqlalchemy import text
 from greenroute.store import immediate
 
+MAX_JOB_ATTEMPTS = 3
+
 PENDING = ('queued','waiting_for_carbon','retry_pending')
 TERMINAL = ('succeeded','failed','expired','cancelled','unknown')
 

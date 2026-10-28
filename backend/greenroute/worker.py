@@ -18,7 +18,7 @@ from greenroute.endpoint_health import record_outcome
 from greenroute.estimation import capture_context, persist
 from greenroute.grid import latest_snapshots
 from greenroute.inference import execute, UpstreamFailure
-from greenroute.jobs import cleanup, stamp, terminal_values
+from greenroute.jobs import cleanup, stamp, terminal_values, MAX_JOB_ATTEMPTS
 from greenroute.policy import carbon_decision
 from greenroute.store import immediate, make_engine, ready
 from greenroute.runtime import check_runtime, policy_options, execute_endpoint
@@ -95,7 +95,7 @@ class Worker:
                 conn.execute(text("UPDATE jobs SET state='expired',terminal_at=:terminal,cleanup_at=:cleanup,"
                     "metadata_expires_at=:metadata WHERE id=:id"),dict(id=jid,**terminal_values(now)))
                 return None
-            if job['attempt_count'] >= 3:
+            if job['attempt_count'] >= MAX_JOB_ATTEMPTS:
                 conn.execute(text("UPDATE jobs SET state='failed',terminal_at=:terminal,cleanup_at=:cleanup,"
                     "metadata_expires_at=:metadata WHERE id=:id"),dict(id=jid,**terminal_values(now)))
                 return None
@@ -144,7 +144,7 @@ class Worker:
                         delay = max(delay,guidance)
                     except (ValueError,TypeError,OverflowError):
                         pass
-                if failure.safe_to_retry and claim['count'] < 3 and delay < (claim['deadline']-now).total_seconds():
+                if failure.safe_to_retry and claim['count'] < MAX_JOB_ATTEMPTS and delay < (claim['deadline']-now).total_seconds():
                     state,retry_at = 'retry_pending',stamp(now+timedelta(seconds=delay))
             conn.execute(text('UPDATE attempts SET ended_at=:at,outcome=:outcome,uncertain=:uncertain,usage=:usage,'
                               'upstream_request_id=:upstream WHERE id=:id'),
