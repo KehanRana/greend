@@ -22,13 +22,14 @@ def main():
         print(json.dumps({'status': 'invalid_manifest', 'network_requests': 0}))
         return 1
     credentials_present = all(os.environ.get(d.api_key_env, '').strip() for d in manifest.deployments)
-    grid_present = bool(os.environ.get('ELECTRICITYMAPS_API_KEY', '').strip())
+    grid_present = bool(os.environ.get('GREENROUTE_ELECTRICITYMAPS_API_KEY', '').strip())
     print(json.dumps({'status': 'offline_config_valid', 'network_requests': 0,
         'deployment_count': len(manifest.deployments),
         'inference_credentials_present': credentials_present, 'grid_credential_present': grid_present,
         'locality_verified': False, 'live_runtime_enabled': False,
+        'all_deployments_reviewed': all(d.locality_verified and d.model_equivalence_verified for d in manifest.deployments),
         'remaining_gates': ['entitlement_and_rate_limits', 'zone_and_locality_review',
-                            'model_equivalence', 'budget', 'isolated_live_runtime', 'real_provider_validation']}))
+                            'model_equivalence', 'budget', 'explicit_live_database_initialization', 'real_provider_validation']}))
     return 0
 
 

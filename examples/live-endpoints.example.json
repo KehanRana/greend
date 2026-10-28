@@ -10,7 +10,9 @@
       "model_alias": "shared-model",
       "served_model": "deployed-model-a",
       "model_version": "REPLACE_WITH_IMMUTABLE_MODEL_REVISION",
-      "locality_evidence": "REPLACE_WITH_DEPLOYMENT_AND_PROCESSING_LOCALITY_EVIDENCE"
+      "locality_evidence": "REPLACE_WITH_DEPLOYMENT_AND_PROCESSING_LOCALITY_EVIDENCE",
+      "locality_verified": false,
+      "model_equivalence_verified": false
     },
     {
       "id": "region-b",
@@ -21,7 +23,9 @@
       "model_alias": "shared-model",
       "served_model": "deployed-model-b",
       "model_version": "REPLACE_WITH_IMMUTABLE_MODEL_REVISION",
-      "locality_evidence": "REPLACE_WITH_DEPLOYMENT_AND_PROCESSING_LOCALITY_EVIDENCE"
+      "locality_evidence": "REPLACE_WITH_DEPLOYMENT_AND_PROCESSING_LOCALITY_EVIDENCE",
+      "locality_verified": false,
+      "model_equivalence_verified": false
     }
   ]
 }
