@@ -20,7 +20,7 @@ def interactive_decision(request_id, model, endpoints, mode="demo", model_versio
 
 
 def carbon_decision(request_id, model, endpoints, policy, snapshots, now, max_age_seconds=300,
-                    mode="demo", model_version="fixture-v1"):
+                    mode="demo", model_version="fixture-v1", granularity=None):
     """Pure flexible-work decision. The caller dispatches or persists the result in M3.
 
     JobPolicy is validated at submission; its deadline is compared to the injected
@@ -50,7 +50,7 @@ def carbon_decision(request_id, model, endpoints, policy, snapshots, now, max_ag
             zone = endpoint.get("grid_zone")
             snapshot = snapshots.get(zone)
             statuses[eid] = ("invalid" if snapshot and snapshot.zone != zone
-                             else signal_status(snapshot, now, max_age_seconds, mode))
+                             else signal_status(snapshot, now, max_age_seconds, mode, granularity))
             if snapshot:
                 snapshot_ids[eid] = snapshot.id
 

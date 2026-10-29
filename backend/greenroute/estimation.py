@@ -20,13 +20,16 @@ def capture_context(settings, model, endpoints, eligible, snapshots, now):
         snapshot=snapshots.get(e['grid_zone']) if e.get('grid_zone') else None
         evidence[e['id']] = None if snapshot is None else dict(id=snapshot.id,zone=snapshot.zone,
             intensity=snapshot.intensity,source=snapshot.source,mode=snapshot.mode,
+            temporal_granularity=snapshot.temporal_granularity,
             observed_at=snapshot.observed_at.isoformat(),retrieved_at=snapshot.retrieved_at.isoformat(),
-            status=signal_status(snapshot,now,settings.grid_max_age_seconds,settings.mode))
+            status=signal_status(snapshot,now,settings.grid_max_age_seconds,settings.mode,
+                                 settings.grid_temporal_granularity if settings.mode == "live" else None))
     return dict(method_version=METHOD,bound_at=stamp(now),model=model,model_version=next((e['model_version'] for e in endpoints if e['id'] in eligible),None),
         baseline_endpoint=settings.baseline_endpoint,eligible=list(eligible),signals=evidence,
         energy_model_version=settings.energy_model_version,
         kwh_per_1000_tokens=settings.energy_kwh_per_1000_tokens,
-        energy_is_illustrative=True,usage_provenance='simulated_usage' if settings.mode == 'demo' else 'provider_reported_usage',mode=settings.mode)
+        grid_temporal_granularity=settings.grid_temporal_granularity if settings.mode == "live" else None,
+        grid_max_age_seconds=settings.grid_max_age_seconds,energy_is_illustrative=True,usage_provenance='simulated_usage' if settings.mode == 'demo' else 'provider_reported_usage',mode=settings.mode)
 
 
 def calculate(context, selected, usage):

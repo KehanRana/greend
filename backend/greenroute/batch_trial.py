@@ -62,6 +62,7 @@ async def run_batch_trial(plan, client, key, clock, sleep=asyncio.sleep, monoton
         response = await request('GET', '/api/regions')
         if response.status_code != 200 or response.json().get('mode') != plan.mode:
             return report | {'reason': 'regional_metadata_unavailable'}
+        report['grid_policy'] = response.json().get('grid_policy')
         eligible = [r for r in response.json()['items'] if r['healthy'] and r['model'] == plan.model
             and r['region'] in plan.allowed_regions
             and r['locality'] == ('verified' if plan.mode == 'live' else 'simulated')]

@@ -38,6 +38,7 @@ def main():
     parser.add_argument('--zone', action='append', default=[], help='Explicit Electricity Maps zone; repeat up to 10 times')
     parser.add_argument('--timeout-seconds', type=float, default=10)
     parser.add_argument('--max-age-seconds', type=float, default=300)
+    parser.add_argument('--granularity', choices=['5_minutes','15_minutes','hourly'], default='hourly')
     args = parser.parse_args()
     if (len(args.zone) > 10 or len(set(args.zone)) != len(args.zone)
             or any(not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', z) for z in args.zone)
@@ -55,7 +56,7 @@ def main():
     async def run():
         async with httpx.AsyncClient(trust_env=False, timeout=args.timeout_seconds) as client:
             return await check_access(client, key, SystemClock(), args.zone,
-                                      args.timeout_seconds, args.max_age_seconds)
+                                      args.timeout_seconds, args.max_age_seconds, args.granularity)
     try:
         report = asyncio.run(run())
     except Exception:

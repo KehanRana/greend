@@ -9,6 +9,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from greenroute.clock import require_aware
+from greenroute.grid_policy import INTERVAL_SECONDS
 from greenroute.grid import GridAdapterError, Observation
 from greenroute.inference import execute_http
 
@@ -93,7 +94,10 @@ class VLLMAdapter:
 class ElectricityMapsAdapter:
     """v4 lifecycle, consumption-based signals. No fixture fallback and no retries here."""
     def __init__(self, client: httpx.AsyncClient, api_key: SecretStr, clock,
-                 timeout_seconds=5, max_age_seconds=300):
+                 timeout_seconds=5, max_age_seconds=300, temporal_granularity="hourly"):
+        if temporal_granularity not in INTERVAL_SECONDS:
+            raise ValueError("Unsupported grid granularity")
+        self.temporal_granularity = temporal_granularity
         if not api_key.get_secret_value().strip() or not 0 < timeout_seconds <= 60 or max_age_seconds <= 0:
             raise ValueError('A grid credential and positive bounded timeout/freshness are required')
         self.client, self.api_key, self.clock = client, api_key, clock
@@ -108,7 +112,8 @@ class ElectricityMapsAdapter:
                 for zone in zones:
                     response = await self.client.get(
                         'https://api.electricitymaps.com/v4/carbon-intensity/latest',
-                        params={'zone': zone, 'emissionFactorType': 'lifecycle',
+                        params={'zone': zone, 'temporalGranularity': self.temporal_granularity,
+                                'emissionFactorType': 'lifecycle',
                                 'flowTraced': 'true', 'disableCallerLookup': 'true'},
                         headers={'auth-token': self.api_key.get_secret_value()}, follow_redirects=False)
                     response.raise_for_status()
@@ -120,11 +125,13 @@ class ElectricityMapsAdapter:
                             or not math.isfinite(intensity) or intensity < 0
                             or not 0 <= age <= self.max_age_seconds
                             or data.get('emissionFactorType') != 'lifecycle'
-                            or data.get('flowTraced') is not True):
+                            or data.get('flowTraced') is not True
+                            or data.get('temporalGranularity') != self.temporal_granularity):
                         raise ValueError()
                     # Source timestamp is preserved; updatedAt is not the observation time.
                     observations.append(Observation(zone, float(intensity), observed,
-                        'electricitymaps-v4:lifecycle:consumption', mode='live'))
+                        'electricitymaps-v4:lifecycle:consumption', mode='live',
+                        temporal_granularity=self.temporal_granularity))
         except (httpx.HTTPError, TimeoutError, ValueError, KeyError, TypeError, AttributeError):
             raise GridAdapterError('Live grid batch unavailable or invalid') from None
         return observations

@@ -5,6 +5,7 @@ from datetime import datetime
 
 import httpx
 from greenroute.clock import require_aware
+from greenroute.grid_policy import freshness_policy, INTERVAL_SECONDS
 
 BASE = 'https://api.electricitymaps.com/v4'
 
@@ -14,9 +15,12 @@ def failure(status):
             429: 'rate_limited'}.get(status, 'redirect_refused' if 300 <= status < 400 else 'provider_error')
 
 
-async def check_access(client, key, clock, zones=(), timeout_seconds=10, max_age_seconds=300):
+async def check_access(client, key, clock, zones=(), timeout_seconds=10, max_age_seconds=300, temporal_granularity="hourly"):
+    if temporal_granularity not in INTERVAL_SECONDS:
+        raise ValueError('Unsupported grid granularity')
     report = dict(status='failed', api_version='v4', checked_at=clock.now().isoformat(),
         network_requests=0, discovery_status='not_checked', accessible_zones=[], zones=[],
+        grid_policy=freshness_policy(temporal_granularity,max_age_seconds),
         max_age_seconds=max_age_seconds, writes_performed=False, locality_verified=False)
     if not key.strip():
         return report | {'status': 'missing_credential'}
@@ -57,7 +61,7 @@ async def check_access(client, key, clock, zones=(), timeout_seconds=10, max_age
         if zone not in data:
             report['zones'].append(item | {'status': 'unknown_zone'})
             continue
-        payload, status = await get('/carbon-intensity/latest', dict(zone=zone,
+        payload, status = await get('/carbon-intensity/latest', dict(zone=zone, temporalGranularity=temporal_granularity,
             emissionFactorType='lifecycle', flowTraced='true', disableCallerLookup='true'))
         item['status'] = status
         if status == 'ok':
@@ -69,6 +73,11 @@ async def check_access(client, key, clock, zones=(), timeout_seconds=10, max_age
                         or payload.get('emissionFactorType') != 'lifecycle'
                         or payload.get('flowTraced') is not True):
                     raise ValueError()
+                item['returned_granularity'] = payload.get('temporalGranularity') if payload.get('temporalGranularity') in INTERVAL_SECONDS else None
+                if payload.get('temporalGranularity') != temporal_granularity:
+                    item['status'] = 'granularity_mismatch'
+                    report['zones'].append(item)
+                    continue
                 age = (clock.now() - observed).total_seconds()
                 item.update(status='future' if age < 0 else 'stale' if age > max_age_seconds else 'fresh',
                             observed_at=observed.isoformat(), age_seconds=age,

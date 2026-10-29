@@ -68,9 +68,11 @@ class Worker:
             policy = JobPolicy.model_validate_json(job['policy'])
             request = ChatRequest.model_validate_json(job['payload'])
             decision_id = 'req_'+uuid4().hex
-            snapshots=latest_snapshots(self.engine, self.settings.mode)
+            snapshots=latest_snapshots(self.engine, self.settings.mode,
+                                       self.settings.grid_temporal_granularity if self.settings.mode == "live" else None)
             d = carbon_decision(decision_id,request.model,endpoints,policy,snapshots,now,
-                                self.settings.grid_max_age_seconds, **policy_options(self.settings))
+                                self.settings.grid_max_age_seconds, **policy_options(self.settings),
+                                granularity=self.settings.grid_temporal_granularity if self.settings.mode == "live" else None)
             if d.action == 'select':
                 d.estimation_context=capture_context(self.settings,request.model,endpoints,d.eligible,snapshots,now)
                 running=conn.execute(text("SELECT COUNT(*) FROM jobs WHERE state='running'")).scalar()

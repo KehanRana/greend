@@ -97,10 +97,11 @@ async def run_trial(plan, client, key, clock):
         required = {baseline, eligible[0]['endpoint_id']}
         if any(r['signal_status'] != 'fresh' for r in eligible if r['endpoint_id'] in required):
             return report | {'reason': 'fresh_comparison_signals_required'}
+        report['grid_policy'] = metadata.get('grid_policy')
         report['baseline_endpoint'] = baseline
         report['signals_at_preflight'] = [{k: r.get(k) for k in (
             'endpoint_id', 'grid_zone', 'signal_status', 'snapshot_id', 'source',
-            'observed_at', 'retrieved_at', 'intensity_gco2e_kwh')} for r in eligible]
+            'observed_at', 'retrieved_at', 'intensity_gco2e_kwh', 'temporal_granularity')} for r in eligible]
         report['status'] = 'running'
         for _ in range(plan.requests):
             report['dispatches'] += 1

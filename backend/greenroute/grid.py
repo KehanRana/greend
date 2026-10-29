@@ -23,6 +23,7 @@ class Observation:
     observed_at: datetime
     source: str
     mode: str = "demo"
+    temporal_granularity: str | None = None
 
 
 @dataclass(frozen=True)
@@ -35,15 +36,17 @@ class Snapshot:
     source: str
     mode: str = "demo"
     quality_flags: tuple[str, ...] = ()
+    temporal_granularity: str | None = None
 
 
-def signal_status(snapshot: Snapshot | None, now: datetime, max_age_seconds=300, mode="demo") -> str:
+def signal_status(snapshot: Snapshot | None, now: datetime, max_age_seconds=300, mode="demo", granularity=None) -> str:
     now = require_aware(now)
     if snapshot is None:
         return "unavailable"
     if (snapshot.quality_flags or snapshot.intensity is None
             or not math.isfinite(snapshot.intensity) or snapshot.intensity < 0
-            or not snapshot.source or snapshot.mode != mode):
+            or not snapshot.source or snapshot.mode != mode
+            or (granularity is not None and snapshot.temporal_granularity != granularity)):
         return "invalid"
     observed = require_aware(snapshot.observed_at)
     retrieved = require_aware(snapshot.retrieved_at)
@@ -83,15 +86,15 @@ class FixtureGridAdapter:
             raise GridAdapterError("Fixture has no approved mapping for requested zone") from None
 
 
-def latest_snapshots(engine, mode="demo") -> dict[str, Snapshot]:
+def latest_snapshots(engine, mode="demo", granularity=None) -> dict[str, Snapshot]:
     with engine.connect() as conn:
         rows = conn.execute(text("SELECT * FROM (SELECT *, ROW_NUMBER() OVER "
             "(PARTITION BY zone ORDER BY retrieved_at DESC, rowid DESC) AS rank "
-            "FROM grid_snapshots WHERE mode=:mode) WHERE rank=1"), dict(mode=mode)).mappings().all()
+            "FROM grid_snapshots WHERE mode=:mode AND (:granularity IS NULL OR temporal_granularity=:granularity)) WHERE rank=1"), dict(mode=mode, granularity=granularity)).mappings().all()
     return {r["zone"]: Snapshot(id=r["id"], zone=r["zone"], intensity=r["intensity"],
         observed_at=datetime.fromisoformat(r["observed_at"]),
         retrieved_at=datetime.fromisoformat(r["retrieved_at"]), source=r["source"],
-        mode=r["mode"], quality_flags=tuple(json.loads(r["quality_flags"] or "[]"))) for r in rows}
+        mode=r["mode"], temporal_granularity=r["temporal_granularity"], quality_flags=tuple(json.loads(r["quality_flags"] or "[]"))) for r in rows}
 
 
 class GridPoller:
@@ -134,11 +137,12 @@ class GridPoller:
                     if not observation.source or observation.mode != self.mode:
                         flags.append("invalid_provenance")
                     conn.execute(text("INSERT INTO grid_snapshots "
-                        "(id,zone,intensity,observed_at,retrieved_at,source,mode,quality_flags) "
-                        "VALUES (:id,:zone,:intensity,:observed,:retrieved,:source,:mode,:flags)"),
+                        "(id,zone,intensity,observed_at,retrieved_at,source,mode,quality_flags,temporal_granularity) "
+                        "VALUES (:id,:zone,:intensity,:observed,:retrieved,:source,:mode,:flags,:granularity)"),
                         dict(id="grid_" + uuid4().hex, zone=observation.zone, intensity=intensity,
                              observed=observed.isoformat(), retrieved=retrieved.isoformat(),
-                             source=observation.source, mode=observation.mode, flags=json.dumps(flags)))
+                             source=observation.source, mode=observation.mode, flags=json.dumps(flags),
+                             granularity=observation.temporal_granularity))
             self.failures, self.last_error, self.last_success_at = 0, None, retrieved
             return True
         except Exception:

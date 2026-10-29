@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from greenroute.grid_policy import Granularity
 from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr, field_validator, model_validator
 
@@ -18,7 +19,8 @@ class Settings(BaseModel):
     mock_delay_seconds: float = Field(default=0, ge=0, le=30, allow_inf_nan=False)
 
     grid_refresh_seconds: float = Field(default=60, ge=1, le=900)
-    grid_max_age_seconds: float = Field(default=300, gt=0, le=3600)
+    grid_temporal_granularity: Granularity = "hourly"
+    grid_max_age_seconds: float = Field(default=300, gt=0, le=7200, allow_inf_nan=False)
     grid_timeout_seconds: float = Field(default=5, gt=0, le=60)
 
     pending_job_limit: int = Field(default=1000, ge=1, le=100000)

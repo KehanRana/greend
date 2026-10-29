@@ -26,6 +26,7 @@ from greenroute.inference import execute, UpstreamFailure
 from greenroute.store import make_engine, ready, utcnow
 from greenroute.runtime import check_runtime, policy_options, execute_endpoint
 from greenroute.live import ElectricityMapsAdapter
+from greenroute.grid_policy import freshness_policy
 
 
 def error(status, message, code):
@@ -56,7 +57,7 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
             if settings.mode == 'live':
                 poller.adapter = grid_adapter or ElectricityMapsAdapter(client,
                     settings.electricitymaps_api_key, clock, settings.grid_timeout_seconds,
-                    settings.grid_max_age_seconds)
+                    settings.grid_max_age_seconds, settings.grid_temporal_granularity)
             await poller.refresh()
             poll_task = asyncio.create_task(poller.run(), name="grid-poller")
             try:
@@ -150,7 +151,7 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
     @app.get("/api/regions", dependencies=[Depends(authenticated)])
     async def regions():
         try:
-            snapshots = latest_snapshots(engine, settings.mode)
+            snapshots = latest_snapshots(engine, settings.mode, settings.grid_temporal_granularity if settings.mode == "live" else None)
             with engine.connect() as conn:
                 endpoints = conn.execute(text("SELECT * FROM endpoints ORDER BY latency_rank,id")).mappings().all()
         except Exception:
@@ -159,23 +160,26 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
         items = []
         for endpoint in endpoints:
             snapshot = snapshots.get(endpoint["grid_zone"])
-            status = signal_status(snapshot, now, settings.grid_max_age_seconds, settings.mode)
+            status = signal_status(snapshot, now, settings.grid_max_age_seconds, settings.mode,
+                                   settings.grid_temporal_granularity if settings.mode == "live" else None)
             items.append(dict(endpoint_id=endpoint["id"], region=endpoint["region"],
                 grid_zone=endpoint["grid_zone"], model=endpoint["model"],
                 model_version=endpoint["model_version"], healthy=bool(endpoint["healthy"]),
                 locality=endpoint["locality"], latency_rank=endpoint["latency_rank"],
                 disabled_reason=endpoint["disabled_reason"], consecutive_failures=endpoint["consecutive_failures"],
+                temporal_granularity=snapshot.temporal_granularity if snapshot else None,
                 signal_status=status, intensity_gco2e_kwh=snapshot.intensity if snapshot else None,
                 snapshot_id=snapshot.id if snapshot else None, source=snapshot.source if snapshot else None,
                 observed_at=snapshot.observed_at.isoformat() if snapshot else None,
                 retrieved_at=snapshot.retrieved_at.isoformat() if snapshot else None,
                 age_seconds=(now-snapshot.observed_at).total_seconds() if snapshot else None,
                 quality_flags=list(snapshot.quality_flags) if snapshot else []))
-        return {"mode": settings.mode, "evaluated_at": now.isoformat(), "poller": poller.metadata(), "items": items}
+        return {"mode": settings.mode, "evaluated_at": now.isoformat(), "poller": poller.metadata(), "grid_policy": freshness_policy(settings.grid_temporal_granularity, settings.grid_max_age_seconds) if settings.mode == "live" else None, "items": items}
 
     @app.get("/api/metrics")
     async def read_metrics(owner: str = Depends(authenticated), mode: Literal['demo','live'] | None = None):
         return metrics(engine,owner,mode or settings.mode,clock.now(),settings.mode) | {'configuration':{
+            'grid_policy':freshness_policy(settings.grid_temporal_granularity,settings.grid_max_age_seconds) if settings.mode == 'live' else None,
             'baseline_endpoint':settings.baseline_endpoint,'energy_model_version':settings.energy_model_version,
             'kwh_per_1000_tokens':settings.energy_kwh_per_1000_tokens}}
 
@@ -245,7 +249,7 @@ def create_app(settings=None, transport=None, clock=None, grid_adapter=None):
             selected = next((e for e in endpoints if e["id"] == decision.selected_endpoint), None)
             if selected:
                 decision.estimation_context=capture_context(settings,payload.model,endpoints,decision.eligible,
-                                                             latest_snapshots(engine, settings.mode),clock.now())
+                                                             latest_snapshots(engine, settings.mode, settings.grid_temporal_granularity if settings.mode == "live" else None),clock.now())
             conn.execute(text("INSERT INTO decisions (request_id,created_at,data) VALUES (:id,:at,:data)"),
                          dict(id=request_id, at=jobs.stamp(clock.now()), data=decision.model_dump_json()))
             if selected:
