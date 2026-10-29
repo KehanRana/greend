@@ -7,7 +7,7 @@ Use the root README for initial install/build commands. Keep your environment lo
 ## Start and check
 
 1. Activate the Python environment, load `.env`, and export `PYTHONPATH=backend`.
-2. Apply `python -m alembic upgrade head`; current schema is `005`.
+2. Apply `python -m alembic upgrade head`; current schema is `006`.
 3. Build with `npm run build --prefix frontend` before starting the gateway.
 4. Start mock, gateway and worker using the README commands, each on the same configured database/keys.
 5. Check `/health` and `/ready`; open `/dashboard/` and enter the client key.
@@ -66,3 +66,9 @@ A running worker deletes terminal payloads/results after 24 hours and metadata a
 Excluded estimates are visible through reason counts. Missing usage or stale/ineligible baseline evidence is not a measured zero. Old records without dispatch evidence stay excluded. Changing the coefficient/baseline affects future dispatches, not prior estimates. The default demo uses simulated grid, usage and inference data. The isolated live runtime labels provider usage separately; its energy coefficient remains illustrative. See [live setup](live-integration.md).
 
 Live operation requires its own initialized database and reviewed manifest. Follow [the live activation procedure](live-integration.md); do not change a running demo process to live mode or repurpose a database containing demo records.
+
+Grid granularity and freshness are separate live settings. `/api/regions` and metrics
+configuration expose the requested granularity, nominal interval, source-time maximum age and
+policy warnings. Missing or mismatched source granularity cannot qualify. Historical snapshots
+are not backfilled with guessed granularity; the live poller must obtain a matching observation.
+See [freshness setup](grid-access.md#granularity-and-scheduling-freshness).

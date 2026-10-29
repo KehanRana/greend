@@ -40,7 +40,7 @@ Apply migrations before starting or restarting services after an update:
 python -m alembic upgrade head
 ```
 
-Revision `002` adds grid mappings/quality; `003` adds job lifecycle/health; `004` adds estimate metadata and persistent scenarios; `005` adds database runtime identity and locality evidence. Existing M1/M2 records are preserved. Downgrading deletes the corresponding schema/data; use it only on disposable databases.
+Revision `002` adds grid mappings/quality; `003` adds job lifecycle/health; `004` adds estimate metadata and persistent scenarios; `005` adds database runtime identity and locality evidence; `006` preserves source granularity. Existing M1/M2 records are preserved. Downgrading deletes the corresponding schema/data; use it only on disposable databases.
 
 Start the mock in terminal 1:
 
@@ -274,3 +274,7 @@ completion-token limits, preflight gates and report interpretation.
 The trial runner also supports `--kind batch` with explicit `--trial-id` and `--allowed-region`
 arguments. It reserves completion capacity for worker retries and records queue/dispatch evidence;
 see the batch section of [the trial guide](guides/trials.md).
+
+Live grid requests explicitly select `GREENROUTE_GRID_TEMPORAL_GRANULARITY` (`hourly`,
+`15_minutes` or `5_minutes`). The default freshness limit remains 300 seconds; see
+[grid freshness policy](guides/grid-access.md#granularity-and-scheduling-freshness) before changing it.

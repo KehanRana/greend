@@ -60,3 +60,48 @@ this check. See [live integration](live-integration.md) for the remaining deploy
 Contracts: [zone discovery](https://app.electricitymaps.com/docs/reference/helpers),
 [authorization](https://app.electricitymaps.com/docs/quickstart/authorization),
 [latest intensity](https://app.electricitymaps.com/docs/reference/carbon-intensity/latest).
+
+## Granularity and scheduling freshness
+
+Electricity Maps v4 supports `hourly`, `15_minutes` and `5_minutes`. Select the exact source
+interval when checking access:
+
+```sh
+python scripts/check_grid_access.py --env-file .env --zone DE \
+  --granularity hourly --max-age-seconds 300
+```
+
+The checker sends `temporalGranularity` explicitly and compares the returned value. A missing,
+unknown or different value reports `granularity_mismatch`, never `fresh`. Successful discovery
+does not guarantee that your subscription/zone supports each granularity; unsupported requests
+remain access/provider errors and do not fall back to hourly data.
+
+Live scheduling uses two independent environment settings:
+
+```sh
+GREENROUTE_GRID_TEMPORAL_GRANULARITY=hourly
+GREENROUTE_GRID_MAX_AGE_SECONDS=300
+```
+
+Defaults deliberately remain hourly / 300 seconds. If the maximum age is shorter than the
+nominal source interval, metadata warns `freshness_window_shorter_than_source_interval`.
+This is allowed as a strict policy; it can make data stale through most of each interval.
+Granularity describes the observation buckets, not a guarantee of when new data is published.
+Polling more often does not make an older source timestamp fresh.
+
+To evaluate hourly data with an explicit two-hour diagnostic allowance, use
+`--granularity hourly --max-age-seconds 7200`. This does not modify `.env` or scheduling policy.
+A live policy can separately be configured up to 7200 seconds after reviewing the desired
+staleness tolerance, publication lag and API entitlement. No default is widened automatically.
+Alternatively, choose finer-grained data if your API access supports it. Do not shorten a
+nominal interval in configuration unless the provider actually returns that granularity.
+
+Migration 006 stores returned granularity in each snapshot. Live cache selection filters by
+mode and requested granularity before choosing the latest observation, so a newer observation
+from another interval cannot replace the intended signal. Historical snapshots retain unknown
+granularity and are ineligible for live selection until a matching refresh succeeds. There is
+no need to reset the database. Apply `python -m alembic upgrade head` before restarting.
+
+`/api/regions` and `/api/metrics` expose the active policy. Dispatch estimation assumptions
+capture both the source granularity and configured maximum age, preserving the policy used for
+that execution even if settings change later. Demo fixture timing and routing remain unchanged.

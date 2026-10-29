@@ -51,6 +51,7 @@ python -m greenroute.worker
 ```
 
 Migration 005 adds a database runtime identity, defaulting existing databases to demo.
+Migration 006 adds source granularity; historical values remain unknown until refreshed.
 Initialization makes no network requests and replaces seeded demo endpoints only when the
 migrated database has no jobs, decisions, attempts, snapshots or estimates. It refuses to
 repurpose a database with execution evidence. Reinitialization with the same manifest is
@@ -80,8 +81,10 @@ zones, lifecycle factors, flow-traced consumption accounting and IP lookup disab
 `datetime` as the observation time; `updatedAt` is not substituted. Mismatched zones/accounting,
 invalid values and future/naive/stale timestamps reject the whole fetched batch. Provider errors
 retain the timestamped cache with bounded polling backoff. There is no demo fallback.
-Freshness defaults to 300 seconds: align this with purchased granularity and availability before
-a trial. Hourly data may legitimately fail that limit. Poll timeout bounds the entire batch.
+Granularity defaults explicitly to `hourly` (`GREENROUTE_GRID_TEMPORAL_GRANULARITY`); responses
+with absent or mismatched granularity fail closed. Freshness independently defaults to 300 seconds: align this with purchased granularity and availability before
+a trial. Hourly data may legitimately fail that limit. Poll timeout bounds the entire batch. See [granularity and freshness](grid-access.md#granularity-and-scheduling-freshness)
+for policy warnings and explicit diagnostic options.
 
 Regional vLLM calls map the public alias to a served model name, disable redirects and use only
 the regional credential plus gateway request identity. Nonstreaming text-chat validation and
