@@ -14,7 +14,7 @@ NOW = datetime(2026, 10, 28, tzinfo=timezone.utc)
 
 def payload(**changes):
     return dict(zone='DE', carbonIntensity=80, datetime=NOW.isoformat(),
-                emissionFactorType='lifecycle', flowTraced=True) | changes
+                emissionFactorType='lifecycle', flowTraced=True, temporalGranularity='hourly') | changes
 
 
 def run(handler, zones=('DE',), **kwargs):

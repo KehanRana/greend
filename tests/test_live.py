@@ -24,7 +24,7 @@ def deployment(**changes):
 
 def grid_data(**changes):
     return dict(zone='TEST-EAST', carbonIntensity=80, datetime=NOW.isoformat(),
-        updatedAt='2099-01-01T00:00:00Z', emissionFactorType='lifecycle', flowTraced=True) | changes
+        updatedAt='2099-01-01T00:00:00Z', emissionFactorType='lifecycle', flowTraced=True, temporalGranularity='hourly') | changes
 
 
 def test_grid_preserves_source_time_and_explicit_provenance():

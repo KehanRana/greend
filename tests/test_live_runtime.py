@@ -57,7 +57,7 @@ def env(tmp_path, monkeypatch):
             zone = request.url.params['zone']
             return httpx.Response(200, json=dict(zone=zone,
                 carbonIntensity=state['intensity_east' if zone == 'ZONE-E' else 'intensity_west'],
-                datetime=state['observed_at'], flowTraced=True, emissionFactorType='lifecycle'))
+                datetime=state['observed_at'], flowTraced=True, emissionFactorType='lifecycle', temporalGranularity='hourly'))
         name = request.url.host.split('.')[0]
         assert request.headers['authorization'] == f'Bearer secret-{name}'
         if request.method == 'GET':
